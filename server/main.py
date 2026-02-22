@@ -21,7 +21,7 @@ logger = logging.getLogger("server")
 
 
 async def _cleanup_loop():
-    """Periodically expire stale jobs."""
+    """Periodically expire stale jobs and clean up expired sessions."""
     while True:
         try:
             await asyncio.sleep(settings.cleanup_interval_s)
@@ -29,6 +29,11 @@ async def _cleanup_loop():
                 expired = await queue_service.expire_stale_jobs(session)
                 if expired:
                     logger.info("Expired %d stale jobs: %s", len(expired), expired)
+
+                from services.auth import cleanup_expired_sessions
+                removed = await cleanup_expired_sessions(session)
+                if removed:
+                    logger.info("Cleaned up %d expired sessions", removed)
         except asyncio.CancelledError:
             break
         except Exception:
@@ -40,6 +45,9 @@ async def lifespan(app: FastAPI):
     # Ensure directories exist
     Path(settings.upload_dir).mkdir(parents=True, exist_ok=True)
     Path(settings.output_dir).mkdir(parents=True, exist_ok=True)
+
+    import models.user  # noqa: F401
+    import models.session  # noqa: F401
 
     # Create tables (dev convenience — use alembic in production)
     await create_db()
@@ -95,6 +103,7 @@ app.add_middleware(
 from routes.worker_ws import router as worker_ws_router
 from routes.client_ws import router as client_ws_router
 from routes.jobs import router as jobs_router
+from routes.auth import router as auth_router
 from routes.admin import router as admin_router
 from routes.feedback import router as feedback_router
 from routes.gallery import router as gallery_router
@@ -102,6 +111,7 @@ from routes.gallery import router as gallery_router
 app.include_router(worker_ws_router)
 app.include_router(client_ws_router)
 app.include_router(jobs_router)
+app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(feedback_router)
 app.include_router(gallery_router)

@@ -14,6 +14,8 @@ from models.job import Job  # noqa: F401, E402
 from models.ban import IPBan  # noqa: F401, E402
 from models.audit_log import AuditLog  # noqa: F401, E402
 from models.settings import RuntimeSetting  # noqa: F401, E402
+from models.user import User  # noqa: F401, E402
+from models.session import Session  # noqa: F401, E402
 from sqlmodel import SQLModel  # noqa: E402
 
 config = context.config

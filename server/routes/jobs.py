@@ -1,13 +1,17 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File
 from fastapi.responses import FileResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from database import get_session
 from models.audit_log import AuditLog
 from models.job import Job, JobStatus
+from models.user import User
 from services import image_validator, queue, rate_limiter, storage
+from services.auth import get_optional_user, require_user
 
 router = APIRouter(prefix="/api")
 
@@ -27,6 +31,7 @@ async def upload_image(
     request: Request,
     file: UploadFile = File(...),
     session: AsyncSession = Depends(get_session),
+    user: Optional[User] = Depends(get_optional_user),
 ):
     ip = _client_ip(request)
 
@@ -34,8 +39,8 @@ async def upload_image(
     if await rate_limiter.is_banned(session, ip):
         raise HTTPException(403, "IP banned")
 
-    # Check rate limit
-    allowed, remaining = await rate_limiter.check_rate_limit(session, ip)
+    # Rate limit by user_id if logged in, otherwise by IP
+    allowed, remaining = await rate_limiter.check_rate_limit(session, ip, user_id=user.id if user else None)
     if not allowed:
         raise HTTPException(429, f"Rate limit exceeded. Try again in 24 hours.")
 
@@ -64,6 +69,7 @@ async def upload_image(
         image_hash=sha256,
         client_ip=ip,
         user_agent=request.headers.get("user-agent"),
+        user_id=user.id if user else None,
         settings={
             "steps": settings.default_steps,
             "guidance": settings.default_guidance,
@@ -94,7 +100,7 @@ async def upload_image(
     # Audit log
     session.add(AuditLog(action="upload", client_ip=ip, job_id=job.id))
     await session.commit()
-    rate_limiter.invalidate_cache(ip)
+    rate_limiter.invalidate_cache(f"user:{user.id}" if user else ip)
 
     return {
         "job_id": job.id,
@@ -206,6 +212,49 @@ async def download_glb(job_id: str, session: AsyncSession = Depends(get_session)
         media_type="model/gltf-binary",
         filename=f"{job.original_filename.rsplit('.', 1)[0]}.glb",
     )
+
+
+@router.get("/my-jobs")
+async def my_jobs(
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_user),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+):
+    offset = (page - 1) * limit
+
+    count_result = await session.execute(
+        select(func.count()).select_from(Job).where(Job.user_id == user.id)
+    )
+    total = count_result.scalar_one()
+
+    result = await session.execute(
+        select(Job)
+        .where(Job.user_id == user.id)
+        .order_by(Job.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    jobs = result.scalars().all()
+
+    return {
+        "jobs": [
+            {
+                "job_id": j.id,
+                "status": j.status.value,
+                "original_filename": j.original_filename,
+                "vertex_count": j.vertex_count,
+                "face_count": j.face_count,
+                "created_at": j.created_at.isoformat(),
+                "completed_at": j.completed_at.isoformat() if j.completed_at else None,
+                "thumbnail_url": f"/api/job/{j.id}/thumbnail" if j.thumbnail_path else None,
+            }
+            for j in jobs
+        ],
+        "total": total,
+        "page": page,
+        "pages": (total + limit - 1) // limit if total > 0 else 1,
+    }
 
 
 @router.get("/queue")

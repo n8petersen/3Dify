@@ -5,7 +5,7 @@ const BASE = '';
 export async function uploadImage(file) {
   const form = new FormData();
   form.append('file', file);
-  const res = await fetch(`${BASE}/api/upload`, { method: 'POST', body: form });
+  const res = await fetch(`${BASE}/api/upload`, { method: 'POST', body: form, credentials: 'include' });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(err.detail || err.message || `Upload failed (${res.status})`);
@@ -14,7 +14,7 @@ export async function uploadImage(file) {
 }
 
 export async function getJob(jobId) {
-  const res = await fetch(`${BASE}/api/job/${jobId}`);
+  const res = await fetch(`${BASE}/api/job/${jobId}`, { credentials: 'include' });
   if (!res.ok) throw new Error(`Job not found (${res.status})`);
   return res.json();
 }
@@ -53,6 +53,7 @@ export async function submitFeedback(jobId, rating, text) {
   const res = await fetch(`${BASE}/api/job/${jobId}/feedback`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
     body: JSON.stringify({ rating, text: text || undefined }),
   });
   if (!res.ok) {
@@ -66,6 +67,7 @@ export async function submitReport(jobId, reason, details) {
   const res = await fetch(`${BASE}/api/job/${jobId}/report`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
     body: JSON.stringify({ reason, details: details || undefined }),
   });
   if (!res.ok) {
@@ -78,6 +80,55 @@ export async function submitReport(jobId, reason, details) {
 export function makeWsUrl(jobId) {
   const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
   return `${proto}://${window.location.host}/ws/job/${jobId}`;
+}
+
+// ─── Auth API ───────────────────────────────────────────────
+
+export async function authRegister(username, password, displayName) {
+  const res = await fetch(`${BASE}/api/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ username, password, display_name: displayName || undefined }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Registration failed');
+  }
+  return res.json();
+}
+
+export async function authLogin(username, password) {
+  const res = await fetch(`${BASE}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ username, password }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Login failed');
+  }
+  return res.json();
+}
+
+export async function authLogout() {
+  await fetch(`${BASE}/api/auth/logout`, { method: 'POST', credentials: 'include' });
+}
+
+export async function getMe() {
+  const res = await fetch(`${BASE}/api/auth/me`, { credentials: 'include' });
+  if (!res.ok) return null;
+  return res.json();
+}
+
+export async function getMyJobs(page = 1, limit = 20) {
+  const res = await fetch(`${BASE}/api/my-jobs?page=${page}&limit=${limit}`, { credentials: 'include' });
+  if (!res.ok) {
+    if (res.status === 401) return null;
+    throw new Error('Failed to fetch jobs');
+  }
+  return res.json();
 }
 
 // ─── Admin API ──────────────────────────────────────────────

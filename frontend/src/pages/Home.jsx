@@ -82,7 +82,7 @@ export default function Home() {
               </div>
             </div>
             <p className="text-xs text-[var(--color-muted-2)] text-center italic">
-              No accounts, no watermarks, no catch. Just a guy with a GPU and a questionable electricity bill.
+              No account required, no watermarks, no catch. Just a guy with a GPU and a questionable electricity bill.
             </p>
           </div>
         </div>

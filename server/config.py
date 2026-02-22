@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     default_seed: int = 42
     default_height_mm: float = 100.0
 
+    # Sessions
+    session_cookie_name: str = "3dify_session"
+    session_max_age_days: int = 30
+
     # Server
     cors_origins: list[str] = ["http://localhost:3000"]
     max_pending_jobs: int = 50

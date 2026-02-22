@@ -33,32 +33,44 @@ async def is_banned(session: AsyncSession, ip: str) -> bool:
     return False
 
 
-async def check_rate_limit(session: AsyncSession, ip: str) -> tuple[bool, int]:
-    """Check if IP is within rate limit.
+async def check_rate_limit(
+    session: AsyncSession, ip: str, user_id: str | None = None
+) -> tuple[bool, int]:
+    """Check if IP (or user) is within rate limit.
 
+    When user_id is provided, rate-limits by user_id instead of IP.
     Returns (allowed, remaining_count).
     """
+    cache_key = f"user:{user_id}" if user_id else ip
     now = time.monotonic()
-    cached = _cache.get(ip)
+    cached = _cache.get(cache_key)
     if cached:
         count, ts = cached
         if now - ts < settings.rate_limit_cache_ttl_s:
             remaining = max(0, settings.rate_limit_per_day - count)
             return count < settings.rate_limit_per_day, remaining
 
-    # Count uploads in last 24h
     cutoff = datetime.utcnow() - timedelta(hours=24)
-    result = await session.execute(
-        select(func.count())
-        .select_from(AuditLog)
-        .where(
-            AuditLog.action == "upload",
-            AuditLog.client_ip == ip,
-            AuditLog.created_at >= cutoff,
+
+    if user_id:
+        from models.job import Job
+        result = await session.execute(
+            select(func.count())
+            .select_from(Job)
+            .where(Job.user_id == user_id, Job.created_at >= cutoff)
         )
-    )
+    else:
+        result = await session.execute(
+            select(func.count())
+            .select_from(AuditLog)
+            .where(
+                AuditLog.action == "upload",
+                AuditLog.client_ip == ip,
+                AuditLog.created_at >= cutoff,
+            )
+        )
     count = result.scalar_one()
-    _cache[ip] = (count, now)
+    _cache[cache_key] = (count, now)
     remaining = max(0, settings.rate_limit_per_day - count)
     return count < settings.rate_limit_per_day, remaining
 

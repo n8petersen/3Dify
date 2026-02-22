@@ -36,6 +36,9 @@ class Job(SQLModel, table=True):
     client_ip: str
     user_agent: Optional[str] = None
 
+    # User (optional — anonymous uploads have NULL)
+    user_id: Optional[str] = Field(default=None, index=True, foreign_key="users.id")
+
     # Generation settings
     settings: dict = Field(default_factory=dict, sa_column=Column(JSON))
 
