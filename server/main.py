@@ -34,6 +34,10 @@ async def _cleanup_loop():
                 removed = await cleanup_expired_sessions(session)
                 if removed:
                     logger.info("Cleaned up %d expired sessions", removed)
+
+                cleaned = await queue_service.cleanup_old_job_files(session)
+                if cleaned:
+                    logger.info("Cleaned files for %d old jobs", cleaned)
         except asyncio.CancelledError:
             break
         except Exception:

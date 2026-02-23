@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     # Job settings
     job_timeout_s: int = 600  # 10 minutes
     cleanup_interval_s: int = 120
+    file_retention_days: int = 7
 
     # Default generation settings
     default_steps: int = 50

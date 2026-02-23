@@ -34,11 +34,19 @@ def get_output_path(relative: str) -> Path:
     return _safe_resolve(settings.output_dir, relative)
 
 
-def delete_job_files(upload_path: str | None, stl_path: str | None, glb_path: str | None) -> None:
+def delete_job_files(
+    upload_path: str | None,
+    stl_path: str | None,
+    glb_path: str | None,
+    thumbnail_path: str | None = None,
+    generated_image_path: str | None = None,
+) -> None:
     for rel, base in [
         (upload_path, settings.upload_dir),
         (stl_path, settings.output_dir),
         (glb_path, settings.output_dir),
+        (thumbnail_path, settings.upload_dir),
+        (generated_image_path, settings.upload_dir),
     ]:
         if rel:
             try:

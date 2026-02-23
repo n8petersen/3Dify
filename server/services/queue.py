@@ -1,11 +1,12 @@
 from datetime import datetime, timedelta
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from database import _is_sqlite
 from models.job import Job, JobStatus
+from services import storage
 
 
 async def enqueue(session: AsyncSession, job: Job) -> Job:
@@ -129,3 +130,41 @@ async def get_queue_summary(session: AsyncSession) -> dict:
     )
     counts = {row[0]: row[1] for row in result.all()}
     return {s.value: counts.get(s, 0) for s in JobStatus}
+
+
+async def cleanup_old_job_files(session: AsyncSession) -> int:
+    """Delete files for old completed/failed/expired jobs, keeping gallery items."""
+    cutoff = datetime.utcnow() - timedelta(days=settings.file_retention_days)
+    result = await session.execute(
+        select(Job).where(
+            Job.status.in_([JobStatus.complete, JobStatus.failed, JobStatus.expired]),
+            Job.completed_at < cutoff,
+            or_(Job.feedback_rating.is_(None), Job.feedback_rating < 4),
+            # Has at least one file path still set
+            or_(
+                Job.upload_path != "",
+                Job.stl_path.isnot(None),
+                Job.glb_path.isnot(None),
+                Job.thumbnail_path.isnot(None),
+                Job.generated_image_path.isnot(None),
+            ),
+        )
+    )
+    cleaned = 0
+    for job in result.scalars().all():
+        storage.delete_job_files(
+            upload_path=job.upload_path or None,
+            stl_path=job.stl_path,
+            glb_path=job.glb_path,
+            thumbnail_path=job.thumbnail_path,
+            generated_image_path=job.generated_image_path,
+        )
+        job.upload_path = ""  # NOT NULL column — use empty string
+        job.stl_path = None
+        job.glb_path = None
+        job.thumbnail_path = None
+        job.generated_image_path = None
+        cleaned += 1
+    if cleaned:
+        await session.commit()
+    return cleaned
