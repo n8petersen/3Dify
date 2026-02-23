@@ -218,10 +218,16 @@ class Worker:
         try:
             await self._process_job(msg)
         except Exception as e:
-            logger.exception(f"Job {job_id} failed")
+            logger.error("Job %s failed: %s", job_id, str(e), exc_info=True)
+            # Surface known-safe error hints; hide internals from client
+            err_str = str(e).lower()
+            if "cuda" in err_str or "gpu" in err_str or "out of memory" in err_str:
+                error_msg = "GPU error during generation. Please try again later."
+            else:
+                error_msg = "Generation failed unexpectedly. Please try again."
             await self._send({
                 "type": "job_failed", "job_id": job_id,
-                "error": str(e), "step": "unknown",
+                "error": error_msg, "step": "unknown",
             })
         finally:
             self.current_job_id = None
@@ -231,7 +237,7 @@ class Worker:
         import pipeline  # deferred import to avoid loading torch at startup
 
         job_id = msg["job_id"]
-        filename = msg.get("image_filename", "input.jpg")
+        job_type = msg.get("job_type", "image")
         settings = msg.get("settings", {})
         loop = asyncio.get_running_loop()
 
@@ -255,13 +261,6 @@ class Worker:
 
             await loop.run_in_executor(None, _wait)
 
-        # ── Save input image ──
-        image_data = base64.b64decode(msg["image_base64"])
-        image_path = os.path.join(config.TEMP_DIR, filename)
-        with open(image_path, 'wb') as f:
-            f.write(image_data)
-        logger.info(f"Saved input image: {image_path} ({len(image_data)} bytes)")
-
         output_dir = os.path.join(config.TEMP_DIR, job_id)
 
         # ── Start GPU sampler ──
@@ -275,13 +274,45 @@ class Worker:
                 loop,
             )
 
-        # ── Run pipeline in executor (blocking) ──
+        image_path = None  # track for cleanup
+
         try:
-            result = await loop.run_in_executor(
-                None,
-                pipeline.run_pipeline,
-                image_path, output_dir, progress_cb, settings,
-            )
+            if job_type == "text":
+                # ── Text-to-3D pipeline ──
+                prompt = msg["prompt"]
+                logger.info(f"Job {job_id} text-to-3D: {prompt[:80]}")
+
+                result = await loop.run_in_executor(
+                    None,
+                    pipeline.run_text_pipeline,
+                    prompt, output_dir, progress_cb, settings,
+                )
+
+                # Send the FLUX-generated intermediate image back to server
+                generated_path = result.get('generated_image_path')
+                if generated_path and os.path.exists(generated_path):
+                    with open(generated_path, 'rb') as f:
+                        img_b64 = base64.b64encode(f.read()).decode('ascii')
+                    await self._send({
+                        "type": "job_generated_image",
+                        "job_id": job_id,
+                        "image_base64": img_b64,
+                    })
+
+            else:
+                # ── Image-to-3D pipeline (unchanged) ──
+                filename = os.path.basename(msg.get("image_filename", "input.jpg")) or "input.jpg"
+                image_data = base64.b64decode(msg["image_base64"])
+                image_path = os.path.join(config.TEMP_DIR, filename)
+                with open(image_path, 'wb') as f:
+                    f.write(image_data)
+                logger.info(f"Saved input image: {image_path} ({len(image_data)} bytes)")
+
+                result = await loop.run_in_executor(
+                    None,
+                    pipeline.run_pipeline,
+                    image_path, output_dir, progress_cb, settings,
+                )
         finally:
             gpu_metrics = sampler.stop()
 
@@ -325,10 +356,11 @@ class Worker:
             )
         finally:
             # ── Cleanup — always runs, even on read/send errors ──
-            try:
-                os.remove(image_path)
-            except OSError:
-                pass
+            if image_path:
+                try:
+                    os.remove(image_path)
+                except OSError:
+                    pass
             shutil.rmtree(output_dir, ignore_errors=True)
 
     # ── Messaging ─────────────────────────────────────────────────────────
@@ -352,16 +384,17 @@ class Worker:
                 logger.warning(f"Send failed: {e}")
 
     async def _idle_unload_loop(self):
-        """Unload model immediately after job completes (no queue waiting)."""
+        """Unload whichever model is loaded after job completes."""
         while True:
             await asyncio.sleep(5)  # check frequently
             if (self.last_job_finished
                     and not self.current_job_id):
                 import pipeline
-                if pipeline.is_model_loaded():
-                    logger.info("No pending jobs — unloading model to free memory")
+                if pipeline.is_any_model_loaded():
+                    loaded = pipeline.loaded_model_name()
+                    logger.info(f"No pending jobs — unloading {loaded} to free memory")
                     loop = asyncio.get_running_loop()
-                    await loop.run_in_executor(None, pipeline.unload_model)
+                    await loop.run_in_executor(None, pipeline.unload_any)
                     self.last_job_finished = None
 
     async def _heartbeat_loop(self):
@@ -377,7 +410,8 @@ class Worker:
                 "utilization_pct": status.get('utilization_pct', 0),
                 "temp_c": status.get('temp_c', 0),
                 "available": not self.paused and not self.current_job_id,
-                "model_loaded": pipeline.is_model_loaded(),
+                "model_loaded": pipeline.is_any_model_loaded(),
+                "loaded_model": pipeline.loaded_model_name(),
             }
             await self._send(payload)
 

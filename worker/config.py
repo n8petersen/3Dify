@@ -31,6 +31,13 @@ DEFAULT_OCTREE_RES = 384
 DEFAULT_HEIGHT_MM = 100.0
 DEFAULT_SEED = 42
 
+# FLUX.1 [dev] text-to-image settings
+FLUX_MODEL_ID = "black-forest-labs/FLUX.1-dev"
+FLUX_PROMPT_SUFFIX = ", studio lighting, white background, centered, front view, single object, high detail, product photography"
+DEFAULT_FLUX_STEPS = 28
+DEFAULT_FLUX_GUIDANCE = 3.5
+FLUX_IMAGE_SIZE = 1024
+
 # WebSocket
 WS_MAX_SIZE = 100 * 1024 * 1024  # 100MB — STLs can be 30-50MB, base64 adds ~33%
 

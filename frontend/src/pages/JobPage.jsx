@@ -1,17 +1,18 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import useJobWebSocket from '../hooks/useJobWebSocket';
 import ProgressView from '../components/ProgressView';
 import ResultsView from '../components/ResultsView';
 import { useToast } from '../components/Toast';
-import { getJob } from '../api';
+import { getJob, getGeneratedImageUrl } from '../api';
 
 export default function JobPage() {
   const { jobId } = useParams();
-  const { progress, result, error: wsError } = useJobWebSocket(jobId);
+  const { progress, result, error: wsError, generatedImageUrl } = useJobWebSocket(jobId);
   const [job, setJob] = useState(null);
   const [pollError, setPollError] = useState(null);
   const toast = useToast();
+  const pollRef = useRef(null);
 
   // Fetch initial job state
   useEffect(() => {
@@ -31,16 +32,39 @@ export default function JobPage() {
     }
   }, [result, jobId]);
 
-  // Determine what to show
+  // Polling fallback — if WS isn't delivering updates, poll every 5s
+  useEffect(() => {
+    if (!jobId) return;
+
+    pollRef.current = setInterval(() => {
+      getJob(jobId)
+        .then((data) => {
+          setJob(data);
+          // Stop polling once job is terminal
+          if (data.status === 'complete' || data.status === 'failed') {
+            clearInterval(pollRef.current);
+          }
+        })
+        .catch(() => {});
+    }, 5000);
+
+    return () => clearInterval(pollRef.current);
+  }, [jobId]);
+
+  // Determine what to show — only the actual job status matters, not WS errors
   const isComplete = job?.status === 'complete';
   const isFailed = job?.status === 'failed' || wsError;
   const isProcessing = !isComplete && !isFailed;
 
-  // Update job progress from WS
+  // Update job progress from WS (preferred) or polling
   const currentStep = progress?.step || job?.current_step;
   const currentPct = progress?.pct ?? job?.progress_pct ?? 0;
   const currentMessage = progress?.message || job?.progress_message;
   const queuePosition = job?.queue_position;
+  const jobType = job?.job_type || 'image';
+
+  // Generated image URL — from WS message or from job data
+  const genImageUrl = generatedImageUrl || job?.generated_image_url;
 
   if (pollError) {
     return (
@@ -90,7 +114,35 @@ export default function JobPage() {
           </Link>
         </div>
       ) : (
-        <ProgressView step={currentStep} pct={currentPct} message={currentMessage} queuePosition={queuePosition} />
+        <div className="w-full max-w-xl mx-auto space-y-6">
+          {/* Show prompt for text jobs */}
+          {jobType === 'text' && job?.prompt && (
+            <div className="glass-strong rounded-xl px-4 py-3 text-center">
+              <p className="text-xs text-[var(--color-muted)] mb-1">Prompt</p>
+              <p className="text-sm text-white italic">"{job.prompt}"</p>
+            </div>
+          )}
+
+          {/* Show generated image when available */}
+          {genImageUrl && (
+            <div className="glass-strong rounded-xl p-4">
+              <p className="text-xs text-[var(--color-muted)] mb-2 text-center">Generated reference image</p>
+              <img
+                src={genImageUrl}
+                alt="AI-generated reference"
+                className="w-72 h-72 sm:w-80 sm:h-80 mx-auto rounded-xl object-cover border border-[var(--color-border)]"
+              />
+            </div>
+          )}
+
+          <ProgressView
+            step={currentStep}
+            pct={currentPct}
+            message={currentMessage}
+            queuePosition={queuePosition}
+            jobType={jobType}
+          />
+        </div>
       )}
     </div>
   );

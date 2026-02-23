@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     default_seed: int = 42
     default_height_mm: float = 100.0
 
+    # Text-to-3D (FLUX.1 [dev]) settings
+    default_flux_steps: int = 28
+    default_flux_guidance: float = 3.5
+    max_prompt_length: int = 500
+
     # Sessions
     session_cookie_name: str = "3dify_session"
     session_max_age_days: int = 30

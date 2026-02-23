@@ -26,6 +26,11 @@ class Job(SQLModel, table=True):
     id: str = Field(default_factory=lambda: str(uuid4()), primary_key=True)
     status: JobStatus = Field(default=JobStatus.pending, index=True)
 
+    # Job type: "image" (upload photo) or "text" (describe it)
+    job_type: str = Field(default="image")
+    prompt: Optional[str] = Field(default=None, sa_column=Column(Text, name="prompt"))
+    generated_image_path: Optional[str] = None  # FLUX-generated image, relative to UPLOAD_DIR
+
     # Upload info
     original_filename: str
     upload_path: str  # relative to UPLOAD_DIR

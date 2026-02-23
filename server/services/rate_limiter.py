@@ -64,7 +64,7 @@ async def check_rate_limit(
             select(func.count())
             .select_from(AuditLog)
             .where(
-                AuditLog.action == "upload",
+                AuditLog.action.in_(["upload", "generate_text"]),
                 AuditLog.client_ip == ip,
                 AuditLog.created_at >= cutoff,
             )

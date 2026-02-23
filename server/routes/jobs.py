@@ -1,7 +1,9 @@
+import re
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field as PydanticField
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,14 +18,31 @@ from services.auth import get_optional_user, require_user
 router = APIRouter(prefix="/api")
 
 
+class GenerateRequest(BaseModel):
+    prompt: str = PydanticField(..., min_length=1, max_length=500)
+
+
 def _client_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
     real_ip = request.headers.get("x-real-ip")
     if real_ip:
         return real_ip.strip()
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
     return request.client.host if request.client else "unknown"
+
+
+def _safe_download_name(name: str) -> str:
+    """Sanitize a name for use in Content-Disposition headers.
+
+    Strips characters that could corrupt or inject into HTTP headers.
+    Keeps only word chars (letters, digits, underscore), whitespace, and hyphens.
+    Collapses runs of whitespace into a single space and falls back to 'download'
+    if nothing remains.
+    """
+    safe = re.sub(r'[^\w\s-]', '', name)
+    safe = re.sub(r'\s+', ' ', safe).strip()
+    return safe or 'download'
 
 
 @router.post("/upload")
@@ -110,6 +129,68 @@ async def upload_image(
     }
 
 
+@router.post("/generate")
+async def generate_from_text(
+    request: Request,
+    body: GenerateRequest,
+    session: AsyncSession = Depends(get_session),
+    user: Optional[User] = Depends(get_optional_user),
+):
+    ip = _client_ip(request)
+
+    # Check ban
+    if await rate_limiter.is_banned(session, ip):
+        raise HTTPException(403, "IP banned")
+
+    # Rate limit (same pool as uploads)
+    allowed, remaining = await rate_limiter.check_rate_limit(session, ip, user_id=user.id if user else None)
+    if not allowed:
+        raise HTTPException(429, "Rate limit exceeded. Try again in 24 hours.")
+
+    # Check queue capacity
+    pending = await queue.pending_count(session)
+    if pending >= settings.max_pending_jobs:
+        raise HTTPException(503, "Queue is full. Please try again later.")
+
+    prompt = body.prompt.strip()
+    if len(prompt) > settings.max_prompt_length:
+        raise HTTPException(400, f"Prompt too long (max {settings.max_prompt_length} chars)")
+
+    # Create text job — sentinel values for image-only NOT NULL columns
+    job = Job(
+        job_type="text",
+        prompt=prompt,
+        original_filename=prompt[:80],
+        upload_path="",
+        image_hash="",
+        client_ip=ip,
+        user_agent=request.headers.get("user-agent"),
+        user_id=user.id if user else None,
+        settings={
+            "steps": settings.default_steps,
+            "guidance": settings.default_guidance,
+            "octree_res": settings.default_octree_res,
+            "seed": settings.default_seed,
+            "height_mm": settings.default_height_mm,
+            "flux_steps": settings.default_flux_steps,
+            "flux_guidance": settings.default_flux_guidance,
+        },
+    )
+    job = await queue.enqueue(session, job)
+
+    # Audit log
+    session.add(AuditLog(action="generate_text", client_ip=ip, job_id=job.id))
+    await session.commit()
+    rate_limiter.invalidate_cache(f"user:{user.id}" if user else ip)
+
+    return {
+        "job_id": job.id,
+        "status": job.status.value,
+        "queue_position": pending + 1,
+        "remaining_uploads": remaining - 1,
+    }
+
+
 @router.get("/job/{job_id}")
 async def get_job(job_id: str, session: AsyncSession = Depends(get_session)):
     result = await session.execute(select(Job).where(Job.id == job_id))
@@ -120,6 +201,7 @@ async def get_job(job_id: str, session: AsyncSession = Depends(get_session)):
     resp = {
         "job_id": job.id,
         "status": job.status.value,
+        "job_type": job.job_type,
         "original_filename": job.original_filename,
         "settings": job.settings,
         "current_step": job.current_step,
@@ -127,6 +209,11 @@ async def get_job(job_id: str, session: AsyncSession = Depends(get_session)):
         "progress_message": job.progress_message,
         "created_at": job.created_at.isoformat(),
     }
+
+    if job.job_type == "text":
+        resp["prompt"] = job.prompt
+        if job.generated_image_path:
+            resp["generated_image_url"] = f"/api/job/{job.id}/generated-image"
 
     # Add queue position for pending jobs
     if job.status == JobStatus.pending:
@@ -174,6 +261,22 @@ async def get_thumbnail(job_id: str, session: AsyncSession = Depends(get_session
     return FileResponse(path, media_type="image/jpeg")
 
 
+@router.get("/job/{job_id}/generated-image")
+async def get_generated_image(job_id: str, session: AsyncSession = Depends(get_session)):
+    result = await session.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job.job_type != "text" or not job.generated_image_path:
+        raise HTTPException(404, "Generated image not available")
+
+    path = storage.get_upload_path(job.generated_image_path)
+    if not path.exists():
+        raise HTTPException(404, "Generated image file missing")
+
+    return FileResponse(path, media_type="image/png")
+
+
 @router.get("/job/{job_id}/stl")
 async def download_stl(job_id: str, session: AsyncSession = Depends(get_session)):
     result = await session.execute(select(Job).where(Job.id == job_id))
@@ -190,7 +293,7 @@ async def download_stl(job_id: str, session: AsyncSession = Depends(get_session)
     return FileResponse(
         path,
         media_type="application/sla",
-        filename=f"{job.original_filename.rsplit('.', 1)[0]}.stl",
+        filename=f"{_safe_download_name(job.original_filename.rsplit('.', 1)[0])}.stl",
     )
 
 
@@ -210,7 +313,7 @@ async def download_glb(job_id: str, session: AsyncSession = Depends(get_session)
     return FileResponse(
         path,
         media_type="model/gltf-binary",
-        filename=f"{job.original_filename.rsplit('.', 1)[0]}.glb",
+        filename=f"{_safe_download_name(job.original_filename.rsplit('.', 1)[0])}.glb",
     )
 
 
@@ -242,7 +345,9 @@ async def my_jobs(
             {
                 "job_id": j.id,
                 "status": j.status.value,
+                "job_type": j.job_type,
                 "original_filename": j.original_filename,
+                "prompt": j.prompt if j.job_type == "text" else None,
                 "vertex_count": j.vertex_count,
                 "face_count": j.face_count,
                 "created_at": j.created_at.isoformat(),

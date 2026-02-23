@@ -11,7 +11,7 @@ router = APIRouter(prefix="/api")
 
 class FeedbackBody(BaseModel):
     rating: int = Field(ge=1, le=5)
-    text: str | None = None
+    text: str | None = Field(None, max_length=2000)
 
 
 @router.post("/job/{job_id}/feedback")

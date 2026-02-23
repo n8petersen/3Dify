@@ -122,6 +122,9 @@ class WorkerBridge:
                     "message": msg.get("message"),
                 })
 
+        elif msg_type == "job_generated_image":
+            await self._handle_generated_image(msg)
+
         elif msg_type == "job_complete":
             await self._handle_job_complete(msg)
 
@@ -151,25 +154,37 @@ class WorkerBridge:
                     if not job:
                         continue
 
-                    # Read image file and send to worker
-                    upload_file = storage.get_upload_path(job.upload_path)
-                    if not upload_file.exists():
-                        await queue.mark_failed(
-                            session, job.id, error="Upload file missing", step="queued"
-                        )
-                        continue
+                    if job.job_type == "text":
+                        # Text-to-3D: send prompt, no image
+                        await self.worker_ws.send_json({
+                            "type": "job_assign",
+                            "job_id": job.id,
+                            "job_type": "text",
+                            "prompt": job.prompt,
+                            "settings": job.settings,
+                        })
+                        logger.info("Dispatched text job %s to worker", job.id)
+                    else:
+                        # Image-to-3D: send image data
+                        upload_file = storage.get_upload_path(job.upload_path)
+                        if not upload_file.exists():
+                            await queue.mark_failed(
+                                session, job.id, error="Upload file missing", step="queued"
+                            )
+                            continue
 
-                    image_data = upload_file.read_bytes()
-                    image_b64 = base64.b64encode(image_data).decode()
+                        image_data = upload_file.read_bytes()
+                        image_b64 = base64.b64encode(image_data).decode()
 
-                    await self.worker_ws.send_json({
-                        "type": "job_assign",
-                        "job_id": job.id,
-                        "image_filename": job.original_filename,
-                        "image_base64": image_b64,
-                        "settings": job.settings,
-                    })
-                    logger.info("Dispatched job %s to worker", job.id)
+                        await self.worker_ws.send_json({
+                            "type": "job_assign",
+                            "job_id": job.id,
+                            "job_type": "image",
+                            "image_filename": job.original_filename,
+                            "image_base64": image_b64,
+                            "settings": job.settings,
+                        })
+                        logger.info("Dispatched image job %s to worker", job.id)
 
             except asyncio.CancelledError:
                 break
@@ -196,6 +211,44 @@ class WorkerBridge:
                     await session.commit()
         except Exception:
             logger.exception("Failed to update progress for %s", job_id)
+
+    async def _handle_generated_image(self, msg: dict) -> None:
+        """Handle the FLUX-generated intermediate image from the worker."""
+        job_id = msg.get("job_id")
+        if not job_id:
+            return
+
+        try:
+            image_b64 = msg.get("image_base64")
+            if not image_b64:
+                return
+
+            # Save image to uploads dir
+            image_data = base64.b64decode(image_b64)
+            image_rel = f"{job_id}/generated.png"
+            storage.save_upload(image_data, image_rel)
+
+            # Update DB
+            async with SQLModelAsyncSession(engine, expire_on_commit=False) as session:
+                from sqlalchemy import select as sa_select
+                from models.job import Job as JobModel
+
+                result = await session.execute(sa_select(JobModel).where(JobModel.id == job_id))
+                job = result.scalar_one_or_none()
+                if job:
+                    job.generated_image_path = image_rel
+                    await session.commit()
+
+            # Fan out to subscribed clients
+            await self._fan_out(job_id, {
+                "type": "generated_image",
+                "job_id": job_id,
+                "url": f"/api/job/{job_id}/generated-image",
+            })
+            logger.info("Saved generated image for job %s", job_id)
+
+        except Exception:
+            logger.exception("Error handling generated_image for %s", job_id)
 
     async def _handle_job_complete(self, msg: dict) -> None:
         job_id = msg.get("job_id")

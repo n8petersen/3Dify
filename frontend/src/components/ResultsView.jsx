@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import ModelViewer from './ModelViewer';
 import StarRating from './StarRating';
 import ReportModal from './ReportModal';
-import { getStlUrl, getGlbUrl, submitFeedback } from '../api';
+import { getStlUrl, getGlbUrl, getGeneratedImageUrl, submitFeedback } from '../api';
 
 function StatItem({ label, value }) {
   return (
@@ -16,6 +16,7 @@ function StatItem({ label, value }) {
 
 export default function ResultsView({ job }) {
   const [showReport, setShowReport] = useState(false);
+  const isTextJob = job.job_type === 'text';
 
   const handleFeedback = async (rating) => {
     await submitFeedback(job.job_id, rating);
@@ -24,6 +25,28 @@ export default function ResultsView({ job }) {
   return (
     <div className="w-full max-w-6xl mx-auto page-enter">
       <div className="max-w-3xl mx-auto space-y-6">
+        {/* Prompt + generated image for text jobs */}
+        {isTextJob && (
+          <div className="glass-strong rounded-2xl p-6 space-y-4">
+            {job.prompt && (
+              <div className="text-center">
+                <p className="text-xs text-[var(--color-muted)] mb-1">Prompt</p>
+                <p className="text-sm text-white italic">"{job.prompt}"</p>
+              </div>
+            )}
+            {job.generated_image_url && (
+              <div className="text-center">
+                <p className="text-xs text-[var(--color-muted)] mb-2">Reference image (FLUX.1)</p>
+                <img
+                  src={getGeneratedImageUrl(job.job_id)}
+                  alt="AI-generated reference"
+                  className="w-72 h-72 sm:w-80 sm:h-80 mx-auto rounded-xl object-cover border border-[var(--color-border)]"
+                />
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Viewer */}
         <ModelViewer glbUrl={getGlbUrl(job.job_id)} />
 
@@ -92,7 +115,7 @@ export default function ResultsView({ job }) {
             to="/"
             className="py-3.5 px-8 btn-accent text-sm font-semibold rounded-xl glow-accent-sm inline-flex items-center gap-2"
           >
-            Convert another photo
+            {isTextJob ? 'Generate another model' : 'Convert another photo'}
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
               <path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
             </svg>

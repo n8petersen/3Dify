@@ -2,6 +2,7 @@ const STEP_LABELS = {
   queued: 'In queue',
   waiting_gpu: 'Waiting for GPU',
   removing_background: 'Removing background',
+  generating_image: 'Generating image from prompt',
   loading_model: 'Loading AI model',
   generating_mesh: 'Generating mesh',
   repairing_mesh: 'Repairing mesh',
@@ -9,7 +10,7 @@ const STEP_LABELS = {
   complete: 'Complete!',
 };
 
-const STEPS = [
+const IMAGE_STEPS = [
   'queued',
   'waiting_gpu',
   'removing_background',
@@ -19,10 +20,22 @@ const STEPS = [
   'exporting',
 ];
 
-export default function ProgressView({ step, pct, message, queuePosition }) {
+const TEXT_STEPS = [
+  'queued',
+  'waiting_gpu',
+  'generating_image',
+  'loading_model',
+  'generating_mesh',
+  'repairing_mesh',
+  'exporting',
+];
+
+export default function ProgressView({ step, pct, message, queuePosition, jobType }) {
+  const steps = jobType === 'text' ? TEXT_STEPS : IMAGE_STEPS;
+
   // If no step yet or status is pending, show queued
   const effectiveStep = step || 'queued';
-  const currentIdx = STEPS.indexOf(effectiveStep);
+  const currentIdx = steps.indexOf(effectiveStep);
   const percent = pct ?? 0;
   const isQueued = effectiveStep === 'queued';
 
@@ -42,6 +55,8 @@ export default function ProgressView({ step, pct, message, queuePosition }) {
       <p className="text-sm sm:text-base text-[var(--color-muted)] text-center mb-6 italic">
         {isQueued
           ? "Your photo is in line. The GPU is a one-at-a-time kind of gal."
+          : jobType === 'text'
+          ? "Your prompt is being turned into a 3D model by a graphics card in someone's living room."
           : "Your model is being hallucinated into existence by a graphics card in someone's living room."}
       </p>
 
@@ -78,7 +93,7 @@ export default function ProgressView({ step, pct, message, queuePosition }) {
 
         {/* Steps */}
         <div className="space-y-2.5">
-          {STEPS.map((s, i) => {
+          {steps.map((s, i) => {
             let state = 'pending';
             if (i < currentIdx) state = 'done';
             else if (i === currentIdx) state = 'active';

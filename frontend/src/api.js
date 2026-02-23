@@ -31,6 +31,24 @@ export function getThumbnailUrl(jobId) {
   return `${BASE}/api/job/${jobId}/thumbnail`;
 }
 
+export async function generateFromText(prompt) {
+  const res = await fetch(`${BASE}/api/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ prompt }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || err.message || `Generation failed (${res.status})`);
+  }
+  return res.json();
+}
+
+export function getGeneratedImageUrl(jobId) {
+  return `${BASE}/api/job/${jobId}/generated-image`;
+}
+
 export async function getQueueStatus() {
   const res = await fetch(`${BASE}/api/queue`);
   if (!res.ok) throw new Error('Failed to fetch queue');
