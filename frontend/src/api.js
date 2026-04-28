@@ -103,7 +103,7 @@ export function makeWsUrl(jobId) {
 export function makeAdminActivityWsUrl() {
   const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
   const token = localStorage.getItem('admin_token') || '';
-  return `${proto}://${window.location.host}/api/admin/activity/ws?token=${encodeURIComponent(token)}`;
+  return `${proto}://${window.location.host}/ws/admin/activity?token=${encodeURIComponent(token)}`;
 }
 
 // ─── Auth API ───────────────────────────────────────────────

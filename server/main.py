@@ -109,6 +109,7 @@ from routes.client_ws import router as client_ws_router
 from routes.jobs import router as jobs_router
 from routes.auth import router as auth_router
 from routes.admin import router as admin_router
+from routes.admin_ws import router as admin_ws_router
 from routes.feedback import router as feedback_router
 from routes.gallery import router as gallery_router
 
@@ -117,6 +118,7 @@ app.include_router(client_ws_router)
 app.include_router(jobs_router)
 app.include_router(auth_router)
 app.include_router(admin_router)
+app.include_router(admin_ws_router)
 app.include_router(feedback_router)
 app.include_router(gallery_router)
 

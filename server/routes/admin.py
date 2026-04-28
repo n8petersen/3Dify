@@ -1,20 +1,18 @@
-import asyncio
 import hmac
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Header, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Header, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 
 from config import settings
-from database import engine, get_session
+from database import get_session
 from models.audit_log import AuditLog
 from models.ban import IPBan
 from models.job import Job, JobStatus
 from services import queue
-from services.worker_bridge import WorkerBridge, _serialize_job_for_admin
+from services.worker_bridge import WorkerBridge
 
 router = APIRouter(prefix="/api/admin")
 
@@ -417,49 +415,3 @@ async def stats(session: AsyncSession = Depends(get_session)):
         "total_failed": failed,
         "failure_rate": round(failed / total, 3) if total else 0,
     }
-
-
-# ─── Live activity feed (WebSocket) ───────────────────────────
-
-@router.websocket("/activity/ws")
-async def admin_activity_ws(ws: WebSocket, token: str = Query(...)):
-    """Live feed of all job lifecycle events for the admin Activity view.
-
-    Auth via ?token= query param (browsers can't send Authorization on WS handshake).
-    On connect: sends a 'snapshot' with the most recent N jobs, then streams events.
-    """
-    if not hmac.compare_digest(token, settings.admin_auth_token):
-        await ws.close(code=4401, reason="Invalid admin token")
-        return
-
-    await ws.accept()
-    bridge: WorkerBridge = ws.app.state.worker_bridge
-
-    # Initial snapshot — most recent 30 jobs across all statuses
-    try:
-        async with SQLModelAsyncSession(engine, expire_on_commit=False) as session:
-            result = await session.execute(
-                select(Job).order_by(Job.created_at.desc()).limit(30)
-            )
-            jobs = result.scalars().all()
-        await ws.send_json({
-            "type": "snapshot",
-            "jobs": [_serialize_job_for_admin(j) for j in jobs],
-            "worker_connected": bridge.worker_connected,
-        })
-    except Exception:
-        pass
-
-    bridge.subscribe_admin(ws)
-    try:
-        while True:
-            # Drain any client messages (pings) — also lets us detect disconnect
-            try:
-                await asyncio.wait_for(ws.receive_text(), timeout=30)
-            except asyncio.TimeoutError:
-                # Send a heartbeat so the connection stays alive through proxies
-                await ws.send_json({"type": "ping"})
-    except (WebSocketDisconnect, Exception):
-        pass
-    finally:
-        bridge.unsubscribe_admin(ws)
