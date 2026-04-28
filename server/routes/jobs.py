@@ -121,6 +121,12 @@ async def upload_image(
     await session.commit()
     rate_limiter.invalidate_cache(f"user:{user.id}" if user else ip)
 
+    # Notify admin activity feed
+    try:
+        await request.app.state.worker_bridge.notify_job_created(job)
+    except Exception:
+        pass  # never break upload on admin-feed failure
+
     return {
         "job_id": job.id,
         "status": job.status.value,
@@ -182,6 +188,12 @@ async def generate_from_text(
     session.add(AuditLog(action="generate_text", client_ip=ip, job_id=job.id))
     await session.commit()
     rate_limiter.invalidate_cache(f"user:{user.id}" if user else ip)
+
+    # Notify admin activity feed
+    try:
+        await request.app.state.worker_bridge.notify_job_created(job)
+    except Exception:
+        pass
 
     return {
         "job_id": job.id,

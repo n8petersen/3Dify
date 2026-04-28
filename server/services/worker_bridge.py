@@ -14,6 +14,31 @@ from services import queue, storage
 logger = logging.getLogger("worker_bridge")
 
 
+def _serialize_job_for_admin(job) -> dict:
+    """Compact job summary for the admin activity feed."""
+    return {
+        "id": job.id,
+        "status": job.status.value if hasattr(job.status, "value") else job.status,
+        "job_type": job.job_type,
+        "prompt": job.prompt,
+        "original_filename": job.original_filename,
+        "client_ip": job.client_ip,
+        "thumbnail_url": f"/api/job/{job.id}/thumbnail" if job.thumbnail_path else None,
+        "generated_image_url": f"/api/job/{job.id}/generated-image" if job.generated_image_path else None,
+        "glb_url": f"/api/job/{job.id}/glb" if job.glb_path else None,
+        "stl_url": f"/api/job/{job.id}/stl" if job.stl_path else None,
+        "vertex_count": job.vertex_count,
+        "face_count": job.face_count,
+        "is_watertight": job.is_watertight,
+        "generation_time_s": job.generation_time_s,
+        "progress_pct": job.progress_pct,
+        "current_step": job.current_step,
+        "error_message": job.error_message,
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+    }
+
+
 class WorkerBridge:
     """Manages the worker WebSocket connection, job dispatch, and client fan-out."""
 
@@ -25,6 +50,8 @@ class WorkerBridge:
 
         # Client progress subscriptions: job_id -> set of WebSocket connections
         self._subscribers: dict[str, set[WebSocket]] = {}
+        # Admin activity-feed subscribers (receive ALL events)
+        self._admin_subscribers: set[WebSocket] = set()
         self._dispatch_task: asyncio.Task | None = None
 
     # ─── Client subscription ───────────────────────────────────────
@@ -47,6 +74,24 @@ class WorkerBridge:
                 await ws.send_json(message)
             except Exception:
                 self.unsubscribe(job_id, ws)
+
+    # ─── Admin activity feed ───────────────────────────────────────
+
+    def subscribe_admin(self, ws: WebSocket) -> None:
+        self._admin_subscribers.add(ws)
+
+    def unsubscribe_admin(self, ws: WebSocket) -> None:
+        self._admin_subscribers.discard(ws)
+
+    async def broadcast_admin(self, message: dict) -> None:
+        """Send an event to every admin activity-feed subscriber."""
+        # Tag with timestamp so the UI can sort/age cards consistently
+        message = {**message, "ts": datetime.now(timezone.utc).isoformat()}
+        for ws in list(self._admin_subscribers):
+            try:
+                await ws.send_json(message)
+            except Exception:
+                self._admin_subscribers.discard(ws)
 
     # ─── Worker connection ─────────────────────────────────────────
 
@@ -114,13 +159,15 @@ class WorkerBridge:
                     message=msg.get("message"),
                 )
                 # Fan out to clients
-                await self._fan_out(job_id, {
+                progress_event = {
                     "type": "progress",
                     "job_id": job_id,
                     "step": msg.get("step"),
                     "progress_pct": msg.get("progress_pct", 0),
                     "message": msg.get("message"),
-                })
+                }
+                await self._fan_out(job_id, progress_event)
+                await self.broadcast_admin({**progress_event, "type": "job_progress"})
 
         elif msg_type == "job_generated_image":
             await self._handle_generated_image(msg)
@@ -163,6 +210,10 @@ class WorkerBridge:
                             "prompt": job.prompt,
                             "settings": job.settings,
                         })
+                        await self.broadcast_admin({
+                            "type": "job_assigned",
+                            "job_id": job.id,
+                        })
                         logger.info("Dispatched text job %s to worker", job.id)
                     else:
                         # Image-to-3D: send image data
@@ -183,6 +234,10 @@ class WorkerBridge:
                             "image_filename": job.original_filename,
                             "image_base64": image_b64,
                             "settings": job.settings,
+                        })
+                        await self.broadcast_admin({
+                            "type": "job_assigned",
+                            "job_id": job.id,
                         })
                         logger.info("Dispatched image job %s to worker", job.id)
 
@@ -245,6 +300,11 @@ class WorkerBridge:
                 "job_id": job_id,
                 "url": f"/api/job/{job_id}/generated-image",
             })
+            await self.broadcast_admin({
+                "type": "job_generated_image",
+                "job_id": job_id,
+                "url": f"/api/job/{job_id}/generated-image",
+            })
             logger.info("Saved generated image for job %s", job_id)
 
         except Exception:
@@ -302,6 +362,16 @@ class WorkerBridge:
                 "is_watertight": msg.get("is_watertight"),
                 "generation_time_s": msg.get("generation_time_s"),
             })
+            await self.broadcast_admin({
+                "type": "job_complete",
+                "job_id": job_id,
+                "vertex_count": msg.get("vertex_count"),
+                "face_count": msg.get("face_count"),
+                "is_watertight": msg.get("is_watertight"),
+                "generation_time_s": msg.get("generation_time_s"),
+                "glb_url": f"/api/job/{job_id}/glb" if glb_rel else None,
+                "stl_url": f"/api/job/{job_id}/stl" if stl_rel else None,
+            })
             logger.info("Job %s complete (%d vertices)", job_id, msg.get("vertex_count", 0))
 
         except Exception:
@@ -329,6 +399,12 @@ class WorkerBridge:
                 "error": error,
                 "step": step,
             })
+            await self.broadcast_admin({
+                "type": "job_failed",
+                "job_id": job_id,
+                "error": error,
+                "step": step,
+            })
             logger.warning("Job %s failed at %s: %s", job_id, step, error)
 
         except Exception:
@@ -351,3 +427,12 @@ class WorkerBridge:
             return False
         await self.worker_ws.send_json({"type": "ping"})
         return True
+
+    # ─── Public broadcast helpers (for routes) ─────────────────────
+
+    async def notify_job_created(self, job) -> None:
+        """Broadcast a newly-created job to admin activity-feed subscribers."""
+        await self.broadcast_admin({
+            "type": "job_created",
+            "job": _serialize_job_for_admin(job),
+        })

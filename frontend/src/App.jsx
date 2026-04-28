@@ -15,6 +15,7 @@ import AdminRoute from './components/admin/AdminRoute';
 import AdminLayout from './components/admin/AdminLayout';
 import AdminLogin from './pages/admin/AdminLogin';
 import AdminOverview from './pages/admin/AdminOverview';
+import AdminActivity from './pages/admin/AdminActivity';
 import AdminJobs from './pages/admin/AdminJobs';
 import AdminModeration from './pages/admin/AdminModeration';
 import AdminRateLimits from './pages/admin/AdminRateLimits';
@@ -57,6 +58,7 @@ export default function App() {
             </AdminRoute>
           }>
             <Route index element={<AdminOverview />} />
+            <Route path="activity" element={<AdminActivity />} />
             <Route path="jobs" element={<AdminJobs />} />
             <Route path="moderation" element={<AdminModeration />} />
             <Route path="rate-limits" element={<AdminRateLimits />} />

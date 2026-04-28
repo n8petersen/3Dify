@@ -100,6 +100,12 @@ export function makeWsUrl(jobId) {
   return `${proto}://${window.location.host}/ws/job/${jobId}`;
 }
 
+export function makeAdminActivityWsUrl() {
+  const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+  const token = localStorage.getItem('admin_token') || '';
+  return `${proto}://${window.location.host}/api/admin/activity/ws?token=${encodeURIComponent(token)}`;
+}
+
 // ─── Auth API ───────────────────────────────────────────────
 
 export async function authRegister(username, password, displayName) {
