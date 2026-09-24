@@ -6,12 +6,16 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from sqlalchemy import select
+
 from config import settings
 from database import create_db
 from services.worker_bridge import WorkerBridge
 from services import queue as queue_service
 from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelAsyncSession
 from database import engine
+from backends import BACKENDS, init_backends
+from models.job import Job, JobStatus
 
 logging.basicConfig(
     level=logging.INFO,
@@ -56,26 +60,43 @@ async def lifespan(app: FastAPI):
     # Create tables (dev convenience — use alembic in production)
     await create_db()
 
-    # Reset orphaned jobs (assigned/processing at shutdown) back to pending
+    # Singletons — WorkerBridge must exist before backends are initialized
+    # (LocalWebSocketBackend holds a reference to it) and before the orphan
+    # reconciliation below, which may reattach consumers for cloud jobs.
+    bridge = WorkerBridge()
+    app.state.worker_bridge = bridge
+    init_backends(bridge)
+
+    # Reconcile jobs left assigned/processing at shutdown. A cloud-backend
+    # job may still be running remotely — reattach a consumer instead of
+    # resetting it to pending, otherwise the dispatch loop would re-submit
+    # (and double-bill) a job that's still executing on RunPod/GCP. Only
+    # local/unknown-backend jobs get reset to pending.
     async with SQLModelAsyncSession(engine, expire_on_commit=False) as session:
-        from sqlalchemy import select
-        from models.job import Job, JobStatus
         result = await session.execute(
             select(Job).where(Job.status.in_([JobStatus.assigned, JobStatus.processing]))
         )
         orphaned = result.scalars().all()
+        reattached, requeued = 0, 0
         for job in orphaned:
+            if job.backend and job.backend != "local" and job.backend_job_id:
+                backend = BACKENDS.get(job.backend)
+                if backend is not None:
+                    asyncio.create_task(bridge._consume(backend, job.id, job.backend_job_id))
+                    reattached += 1
+                    continue
             job.status = JobStatus.pending
             job.assigned_at = None
             job.current_step = None
             job.progress_pct = 0
             job.progress_message = None
+            requeued += 1
         if orphaned:
             await session.commit()
-            logger.info("Re-queued %d orphaned jobs on startup", len(orphaned))
-
-    # Singletons
-    app.state.worker_bridge = WorkerBridge()
+            logger.info(
+                "Startup: reattached %d cloud job(s), re-queued %d local/unknown job(s)",
+                reattached, requeued,
+            )
 
     # Background tasks
     cleanup_task = asyncio.create_task(_cleanup_loop())

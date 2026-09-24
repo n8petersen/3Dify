@@ -97,23 +97,58 @@ async def mark_failed(
 
 
 async def expire_stale_jobs(session: AsyncSession) -> list[str]:
-    """Mark assigned/processing jobs as expired if they've timed out."""
-    cutoff = datetime.utcnow() - timedelta(seconds=settings.job_timeout_s)
+    """Mark assigned/processing jobs as expired if they've timed out.
+
+    Cloud backends get a longer cutoff (job_timeout_cloud_s) — cold starts
+    and endpoint queueing can legitimately take longer than a warm local
+    worker picking a job off the queue. Cutoffs differ per row so this
+    filters in Python rather than in the query.
+    """
+    now = datetime.utcnow()
+    local_cutoff = now - timedelta(seconds=settings.job_timeout_s)
+    cloud_cutoff = now - timedelta(seconds=settings.job_timeout_cloud_s)
     result = await session.execute(
-        select(Job).where(
-            Job.status.in_([JobStatus.assigned, JobStatus.processing]),
-            Job.assigned_at < cutoff,
-        )
+        select(Job).where(Job.status.in_([JobStatus.assigned, JobStatus.processing]))
     )
     expired_ids = []
     for job in result.scalars().all():
-        job.status = JobStatus.expired
-        job.error_message = "Job timed out"
-        job.completed_at = datetime.utcnow()
-        expired_ids.append(job.id)
+        cutoff = local_cutoff if (job.backend or "local") == "local" else cloud_cutoff
+        if job.assigned_at and job.assigned_at < cutoff:
+            job.status = JobStatus.expired
+            job.error_message = "Job timed out"
+            job.completed_at = datetime.utcnow()
+            expired_ids.append(job.id)
     if expired_ids:
         await session.commit()
     return expired_ids
+
+
+async def set_backend(session: AsyncSession, job_id: str, *, backend: str, backend_job_id: str) -> None:
+    result = await session.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+    if job:
+        job.backend = backend
+        job.backend_job_id = backend_job_id
+        await session.commit()
+
+
+async def reset_to_pending(session: AsyncSession, job_id: str) -> None:
+    """Put a claimed job back in the queue (e.g. its backend turned out unavailable)."""
+    result = await session.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+    if job:
+        job.status = JobStatus.pending
+        job.assigned_at = None
+        await session.commit()
+
+
+async def set_cost(session: AsyncSession, job_id: str, *, billed_seconds: float, backend_cost_usd: float) -> None:
+    result = await session.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+    if job:
+        job.billed_seconds = billed_seconds
+        job.backend_cost_usd = backend_cost_usd
+        await session.commit()
 
 
 async def pending_count(session: AsyncSession) -> int:

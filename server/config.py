@@ -39,8 +39,26 @@ class Settings(BaseSettings):
 
     # Job settings
     job_timeout_s: int = 600  # 10 minutes
+    job_timeout_cloud_s: int = 1200  # cloud backends get longer — cold starts, queueing
     cleanup_interval_s: int = 120
     file_retention_days: int = 7
+
+    # Worker backend selection — see server/backends/ and
+    # docs/ai-3d-model-generation.md §5 in the homelab repo
+    worker_backend: str = "local"
+    enabled_backends: list[str] = ["local"]
+    allow_per_job_backend: bool = False
+    stream_stall_s: float = 30.0
+
+    # RunPod Serverless backend
+    runpod_api_key: str = ""
+    runpod_endpoint_id: str = ""
+    runpod_cost_per_hour_usd: float = 1.10
+
+    # GCP Cloud Run backend (not yet implemented)
+    gcp_cloud_run_url: str = ""
+    gcp_sa_key_json: str = ""
+    gcp_cost_per_hour_usd: float = 1.42
 
     # Default generation settings
     default_steps: int = 50
