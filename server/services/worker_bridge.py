@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import logging
+import time
 from datetime import datetime, timezone
 
 from fastapi import WebSocket
@@ -12,6 +13,8 @@ from models.audit_log import AuditLog
 from services import queue, storage
 
 logger = logging.getLogger("worker_bridge")
+
+_JOB_SCOPED_TYPES = {"job_progress", "job_generated_image", "job_complete", "job_failed"}
 
 
 def _serialize_job_for_admin(job) -> dict:
@@ -53,6 +56,11 @@ class WorkerBridge:
         # Admin activity-feed subscribers (receive ALL events)
         self._admin_subscribers: set[WebSocket] = set()
         self._dispatch_task: asyncio.Task | None = None
+
+        # Per-job message queues, used by backends/local.py's stream() so
+        # every backend (local WS worker or a cloud one) is consumed the
+        # same way by _consume() below. Keyed by job_id.
+        self._job_queues: dict[str, asyncio.Queue] = {}
 
     # ─── Client subscription ───────────────────────────────────────
 
@@ -114,7 +122,15 @@ class WorkerBridge:
 
         try:
             async for raw in ws.iter_json():
-                await self._handle_worker_message(raw)
+                msg_type = raw.get("type")
+                job_id = raw.get("job_id")
+                job_queue = self._job_queues.get(job_id) if job_id else None
+                if msg_type in _JOB_SCOPED_TYPES and job_queue is not None:
+                    # A backend's _consume() task is draining this job via
+                    # stream() — hand it off instead of handling inline.
+                    await job_queue.put(raw)
+                else:
+                    await self._handle_worker_message(raw)
         except Exception as e:
             logger.warning("Worker disconnected: %s", e)
         finally:
@@ -148,17 +164,36 @@ class WorkerBridge:
                 "model_loaded": msg.get("model_loaded"),
             }
 
-        elif msg_type == "job_progress":
+        elif msg_type in _JOB_SCOPED_TYPES:
+            # Fallback path — normally these are routed to a per-job queue
+            # in handle_worker() and consumed by _consume() instead. This
+            # only runs if a job-scoped message arrives with no matching
+            # queue (e.g. a race on dispatch/disconnect).
+            await self._process_job_message(msg)
+
+        elif msg_type == "pong":
+            pass  # Heartbeat response
+
+        elif msg_type == "worker_bye":
+            logger.info("Worker sent bye: %s", msg.get("reason"))
+
+    async def _process_job_message(self, msg: dict) -> None:
+        """Apply one worker-protocol job message: DB update + client fan-out.
+
+        Called for every backend, whether the message came from the local
+        WS worker's queue or a cloud backend's stream().
+        """
+        msg_type = msg.get("type")
+
+        if msg_type == "job_progress":
             job_id = msg.get("job_id")
             if job_id:
-                # Update DB progress
                 await self._update_progress(
                     job_id,
                     step=msg.get("step"),
                     pct=msg.get("progress_pct", 0),
                     message=msg.get("message"),
                 )
-                # Fan out to clients
                 progress_event = {
                     "type": "progress",
                     "job_id": job_id,
@@ -178,74 +213,94 @@ class WorkerBridge:
         elif msg_type == "job_failed":
             await self._handle_job_failed(msg)
 
-        elif msg_type == "pong":
-            pass  # Heartbeat response
-
-        elif msg_type == "worker_bye":
-            logger.info("Worker sent bye: %s", msg.get("reason"))
-
     # ─── Job lifecycle ─────────────────────────────────────────────
 
     async def _dispatch_loop(self) -> None:
-        """Periodically check for pending jobs and dispatch to the worker."""
+        """Periodically check for pending jobs and dispatch to a backend."""
+        from backends import BACKENDS
+
         while True:
             try:
                 await asyncio.sleep(2)
-                if not self.worker_ws or self.paused:
-                    continue
-                if self.gpu_status and not self.gpu_status.get("available", True):
+
+                if not settings.allow_per_job_backend:
+                    # Fast path — single configured backend, no per-job
+                    # DB read needed to know which one to check.
+                    backend = BACKENDS.get(settings.worker_backend)
+                    if backend is None or not await backend.available():
+                        continue
+                    async with SQLModelAsyncSession(engine, expire_on_commit=False) as session:
+                        job = await queue.get_next_pending(session)
+                        if not job:
+                            continue
+                        await self._dispatch_to_backend(session, job, backend)
                     continue
 
                 async with SQLModelAsyncSession(engine, expire_on_commit=False) as session:
                     job = await queue.get_next_pending(session)
                     if not job:
                         continue
-
-                    if job.job_type == "text":
-                        # Text-to-3D: send prompt, no image
-                        await self.worker_ws.send_json({
-                            "type": "job_assign",
-                            "job_id": job.id,
-                            "job_type": "text",
-                            "prompt": job.prompt,
-                            "settings": job.settings,
-                        })
-                        await self.broadcast_admin({
-                            "type": "job_assigned",
-                            "job_id": job.id,
-                        })
-                        logger.info("Dispatched text job %s to worker", job.id)
-                    else:
-                        # Image-to-3D: send image data
-                        upload_file = storage.get_upload_path(job.upload_path)
-                        if not upload_file.exists():
-                            await queue.mark_failed(
-                                session, job.id, error="Upload file missing", step="queued"
-                            )
-                            continue
-
-                        image_data = upload_file.read_bytes()
-                        image_b64 = base64.b64encode(image_data).decode()
-
-                        await self.worker_ws.send_json({
-                            "type": "job_assign",
-                            "job_id": job.id,
-                            "job_type": "image",
-                            "image_filename": job.original_filename,
-                            "image_base64": image_b64,
-                            "settings": job.settings,
-                        })
-                        await self.broadcast_admin({
-                            "type": "job_assigned",
-                            "job_id": job.id,
-                        })
-                        logger.info("Dispatched image job %s to worker", job.id)
+                    backend = BACKENDS.get(job.backend or settings.worker_backend)
+                    if backend is None or not await backend.available():
+                        # Not our turn — put it back for the next pass.
+                        await queue.reset_to_pending(session, job.id)
+                        continue
+                    await self._dispatch_to_backend(session, job, backend)
 
             except asyncio.CancelledError:
                 break
             except Exception:
                 logger.exception("Error in dispatch loop")
                 await asyncio.sleep(5)
+
+    async def _dispatch_to_backend(self, session, job, backend) -> None:
+        try:
+            if job.job_type == "image":
+                upload_file = storage.get_upload_path(job.upload_path)
+                if not upload_file.exists():
+                    await queue.mark_failed(session, job.id, error="Upload file missing", step="queued")
+                    return
+            handle = await backend.dispatch(job)
+        except FileNotFoundError as e:
+            await queue.mark_failed(session, job.id, error=str(e), step="queued")
+            return
+        except Exception as e:
+            logger.exception("Dispatch to backend %s failed for job %s", backend.name, job.id)
+            await queue.mark_failed(session, job.id, error=f"Dispatch failed: {e}", step="queued")
+            return
+
+        await queue.set_backend(session, job.id, backend=backend.name, backend_job_id=handle)
+        await self.broadcast_admin({"type": "job_assigned", "job_id": job.id, "backend": backend.name})
+        logger.info("Dispatched %s job %s to backend %s (handle=%s)", job.job_type, job.id, backend.name, handle)
+
+        asyncio.create_task(self._consume(backend, job.id, handle))
+
+    async def _consume(self, backend, job_id: str, handle: str) -> None:
+        """Drain a backend's stream for one job, applying each message the
+        same way regardless of which backend produced it."""
+        start = time.monotonic()
+        try:
+            async for msg in backend.stream(handle):
+                await self._process_job_message(msg)
+        except Exception:
+            logger.exception("Error consuming stream for job %s on backend %s", job_id, backend.name)
+            async with SQLModelAsyncSession(engine, expire_on_commit=False) as session:
+                await queue.mark_failed(session, job_id, error="Backend stream error", step=backend.name)
+            await self._fan_out(job_id, {"type": "failed", "job_id": job_id, "error": "Backend stream error"})
+            await self.broadcast_admin({"type": "job_failed", "job_id": job_id, "error": "Backend stream error"})
+        finally:
+            await self._record_cost(backend, job_id, handle, start)
+
+    async def _record_cost(self, backend, job_id: str, handle: str, start: float) -> None:
+        try:
+            billed = await backend.billed_seconds(handle)
+            if billed is None:
+                billed = time.monotonic() - start
+            cost = billed * backend.cost_per_second_usd
+            async with SQLModelAsyncSession(engine, expire_on_commit=False) as session:
+                await queue.set_cost(session, job_id, billed_seconds=billed, backend_cost_usd=cost)
+        except Exception:
+            logger.exception("Failed to record cost for job %s", job_id)
 
     async def _update_progress(
         self, job_id: str, step: str | None, pct: int, message: str | None

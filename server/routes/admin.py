@@ -85,6 +85,35 @@ async def force_process(request: Request, job_id: str):
     return {"status": "force_process sent"}
 
 
+# ─── Backend selection (cost/speed A-B comparison) ─────────────
+
+class SetBackendRequest(BaseModel):
+    backend: str
+
+
+@router.post("/job/{job_id}/backend", dependencies=[Depends(_verify_admin)])
+async def set_job_backend(
+    job_id: str,
+    body: SetBackendRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    if not settings.allow_per_job_backend:
+        raise HTTPException(403, "Per-job backend selection is disabled (ALLOW_PER_JOB_BACKEND)")
+    if body.backend not in settings.enabled_backends:
+        raise HTTPException(400, f"Backend '{body.backend}' is not enabled")
+
+    result = await session.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job.status != JobStatus.pending:
+        raise HTTPException(409, "Job already dispatched — can't change its backend now")
+
+    job.backend = body.backend
+    await session.commit()
+    return {"job_id": job.id, "backend": job.backend}
+
+
 # ─── Dashboard ─────────────────────────────────────────────────
 
 @router.get("/dashboard", dependencies=[Depends(_verify_admin)])

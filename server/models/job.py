@@ -63,6 +63,14 @@ class Job(SQLModel, table=True):
     # GPU metrics from worker
     gpu_metrics: Optional[dict] = Field(default=None, sa_column=Column(JSON))
 
+    # Compute backend — NULL means settings.worker_backend was used (no
+    # per-job override recorded). Set by the dispatch loop once a backend
+    # claims the job.
+    backend: Optional[str] = Field(default=None, index=True)
+    backend_job_id: Optional[str] = None
+    billed_seconds: Optional[float] = None
+    backend_cost_usd: Optional[float] = None
+
     # Error info
     error_message: Optional[str] = Field(default=None, sa_column=Column(Text))
     error_step: Optional[str] = None
