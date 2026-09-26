@@ -25,7 +25,11 @@ WORKDIR /app
 # the repo and its custom CUDA extension builds are not needed and are skipped here. This is
 # the one step most likely to need iteration once actually built (repo's requirements.txt may
 # pin a conflicting torch — drop that line first if `pip install` tries to reinstall torch).
-RUN git clone --depth 1 https://github.com/Tencent/Hunyuan3D-2.git Hunyuan3D-2.1 \
+#
+# IMPORTANT: this is Tencent-Hunyuan/Hunyuan3D-2.1, NOT Tencent/Hunyuan3D-2 — the latter is
+# the older 2.0 repo and only has a `hy3dgen` module, not `hy3dshape`. Cloning the wrong repo
+# here is what produced "ModuleNotFoundError: No module named 'hy3dshape'" on RunPod.
+RUN git clone --depth 1 https://github.com/Tencent-Hunyuan/Hunyuan3D-2.1.git Hunyuan3D-2.1 \
     && pip install --no-cache-dir -r Hunyuan3D-2.1/requirements.txt
 
 COPY img2stl.py ./
