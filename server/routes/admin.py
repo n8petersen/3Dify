@@ -47,8 +47,10 @@ async def admin_login(body: LoginRequest):
 @router.get("/worker/status", dependencies=[Depends(_verify_admin)])
 async def worker_status(request: Request):
     bridge = _get_bridge(request)
+    is_local = settings.worker_backend == "local"
     return {
-        "connected": bridge.worker_connected,
+        "connected": bridge.worker_connected if is_local else bridge.backend_available,
+        "backend": settings.worker_backend,
         "info": bridge.worker_info,
         "paused": bridge.paused,
     }

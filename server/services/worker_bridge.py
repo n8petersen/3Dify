@@ -50,6 +50,11 @@ class WorkerBridge:
         self.worker_info: dict = {}
         self.gpu_status: dict = {}
         self.paused: bool = False
+        # Cloud backends (RunPod, etc.) have no persistent connection to be
+        # "connected" — this tracks the last `backend.available()` health
+        # check made by the dispatch loop instead, so status endpoints don't
+        # have to make an extra live call on every request.
+        self.backend_available: bool = False
 
         # Client progress subscriptions: job_id -> set of WebSocket connections
         self._subscribers: dict[str, set[WebSocket]] = {}
@@ -223,11 +228,15 @@ class WorkerBridge:
             try:
                 await asyncio.sleep(2)
 
+                if self.paused:
+                    continue
+
                 if not settings.allow_per_job_backend:
                     # Fast path — single configured backend, no per-job
                     # DB read needed to know which one to check.
                     backend = BACKENDS.get(settings.worker_backend)
-                    if backend is None or not await backend.available():
+                    self.backend_available = backend is not None and await backend.available()
+                    if not self.backend_available:
                         continue
                     async with SQLModelAsyncSession(engine, expire_on_commit=False) as session:
                         job = await queue.get_next_pending(session)

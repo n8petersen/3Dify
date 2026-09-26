@@ -147,8 +147,10 @@ app.include_router(gallery_router)
 @app.get("/health")
 async def health():
     bridge = app.state.worker_bridge
+    is_local = settings.worker_backend == "local"
     return {
         "status": "ok",
-        "worker_connected": bridge.worker_connected,
+        "worker_connected": bridge.worker_connected if is_local else bridge.backend_available,
+        "backend": settings.worker_backend,
         "paused": bridge.paused,
     }

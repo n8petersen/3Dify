@@ -37,10 +37,12 @@ async def admin_activity_ws(ws: WebSocket, token: str = Query(...)):
                 select(Job).order_by(Job.created_at.desc()).limit(30)
             )
             jobs = result.scalars().all()
+        is_local = settings.worker_backend == "local"
         await ws.send_json({
             "type": "snapshot",
             "jobs": [_serialize_job_for_admin(j) for j in jobs],
-            "worker_connected": bridge.worker_connected,
+            "worker_connected": bridge.worker_connected if is_local else bridge.backend_available,
+            "backend": settings.worker_backend,
         })
     except Exception:
         pass
