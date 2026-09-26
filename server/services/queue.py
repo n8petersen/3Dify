@@ -35,6 +35,7 @@ async def get_next_pending(session: AsyncSession) -> Job | None:
     if job:
         job.status = JobStatus.assigned
         job.assigned_at = datetime.now(timezone.utc)
+        job.current_step = "waiting_gpu"
         await session.commit()
         await session.refresh(job)
     return job
@@ -139,6 +140,7 @@ async def reset_to_pending(session: AsyncSession, job_id: str) -> None:
     if job:
         job.status = JobStatus.pending
         job.assigned_at = None
+        job.current_step = None
         await session.commit()
 
 
