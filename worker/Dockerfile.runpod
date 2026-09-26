@@ -1,0 +1,37 @@
+# RunPod Serverless worker image — GPU generation only, no WebSocket client.
+#
+# Weights (FLUX.1-dev, Hunyuan3D-2.1 checkpoints) are NOT baked into this image — they live
+# on a RunPod network volume mounted at /runpod-volume, populated once via a temporary pod
+# (see docs/ai-3d-model-generation.md §10.1 in the homelab repo). Setting HOME=/runpod-volume
+# redirects the default `~/.cache/huggingface` and `~/.cache/hy3dgen` cache dirs onto that
+# volume, so weights persist across cold starts instead of re-downloading every time.
+#
+# Layout mirrors the upstream repo root so worker/config.py's relative path resolution
+# (_PROJECT_DIR = parent of worker/) and img2stl.py's `Hunyuan3D-2.1/hy3dshape` sys.path entry
+# work unmodified: /app/img2stl.py, /app/Hunyuan3D-2.1/, /app/worker/*.py.
+#
+# Tag verified against Docker Hub (runpod/pytorch) at build-script-writing time — CUDA 12.9 /
+# torch 2.8.0 / Ubuntu 22.04. Re-check for a newer tag before building if this has gone stale.
+FROM runpod/pytorch:1.3.3-cu1290-torch280-ubuntu2204
+
+ENV HOME=/runpod-volume \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# Hunyuan3D-2.1 code only — weights come from the network volume at runtime.
+# NOTE: only the hy3dshape sub-pipeline is used (img2stl.py imports
+# hy3dshape.pipelines.Hunyuan3DDiTFlowMatchingPipeline directly) — the texture/paint half of
+# the repo and its custom CUDA extension builds are not needed and are skipped here. This is
+# the one step most likely to need iteration once actually built (repo's requirements.txt may
+# pin a conflicting torch — drop that line first if `pip install` tries to reinstall torch).
+RUN git clone --depth 1 https://github.com/Tencent/Hunyuan3D-2.git Hunyuan3D-2.1 \
+    && pip install --no-cache-dir -r Hunyuan3D-2.1/requirements.txt
+
+COPY img2stl.py ./
+COPY worker/pipeline.py worker/gpu_sampler.py worker/gpu_monitor.py worker/config.py worker/runpod_handler.py worker/requirements-runpod.txt ./worker/
+
+RUN pip install --no-cache-dir -r worker/requirements-runpod.txt
+
+WORKDIR /app/worker
+CMD ["python", "-u", "runpod_handler.py"]

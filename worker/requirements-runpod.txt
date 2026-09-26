@@ -1,0 +1,17 @@
+# RunPod Serverless worker image deps.
+#
+# torch itself is NOT listed here — the base image (runpod/pytorch:*-cuda12.9-torch2.8.0-*)
+# ships a CUDA-matched build; reinstalling it here risks clobbering that with a mismatched wheel.
+#
+# Hunyuan3D-2.1's own requirements.txt (installed separately in Dockerfile.runpod) covers the
+# shape-pipeline deps (einops, omegaconf, etc.) — these are img2stl.py/pipeline.py's own deps.
+
+runpod>=1.7.0
+diffusers>=0.30
+transformers>=4.44
+accelerate>=0.33
+bitsandbytes>=0.43
+huggingface_hub>=0.24
+trimesh>=4.0
+rembg>=2.0
+Pillow
