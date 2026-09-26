@@ -126,7 +126,11 @@ class RunPodBackend:
 
                 status = data.get("status")
                 if status in ("COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT"):
-                    async for msg in self._status_fallback(client, handle, status):
+                    # Re-fetch from /status rather than reusing `status` bare —
+                    # the /stream response doesn't carry the "output"/"error"
+                    # payload, so passing it through would lose the real error
+                    # detail (or completed output) in favor of a generic message.
+                    async for msg in self._status_fallback(client, handle, None):
                         yield msg
                     return
 

@@ -67,6 +67,14 @@ class WorkerBridge:
         # same way by _consume() below. Keyed by job_id.
         self._job_queues: dict[str, asyncio.Queue] = {}
 
+        # Strong references to in-flight per-job consume() tasks. asyncio
+        # only holds a weak reference to a task started via create_task —
+        # with nothing else referencing it, the task can be silently
+        # garbage-collected mid-run (no exception, no log line). This bit
+        # the RunPod backend: a job's consume loop vanished ~4.5 minutes in
+        # with no trace, leaving the job stuck at status=assigned forever.
+        self._consume_tasks: set[asyncio.Task] = set()
+
     # ─── Client subscription ───────────────────────────────────────
 
     def subscribe(self, job_id: str, ws: WebSocket) -> None:
@@ -276,7 +284,9 @@ class WorkerBridge:
         await self.broadcast_admin({"type": "job_assigned", "job_id": job.id, "backend": backend.name})
         logger.info("Dispatched %s job %s to backend %s (handle=%s)", job.job_type, job.id, backend.name, handle)
 
-        asyncio.create_task(self._consume(backend, job.id, handle))
+        task = asyncio.create_task(self._consume(backend, job.id, handle))
+        self._consume_tasks.add(task)
+        task.add_done_callback(self._consume_tasks.discard)
 
     async def _consume(self, backend, job_id: str, handle: str) -> None:
         """Drain a backend's stream for one job, applying each message the

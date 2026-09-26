@@ -82,7 +82,9 @@ async def lifespan(app: FastAPI):
             if job.backend and job.backend != "local" and job.backend_job_id:
                 backend = BACKENDS.get(job.backend)
                 if backend is not None:
-                    asyncio.create_task(bridge._consume(backend, job.id, job.backend_job_id))
+                    task = asyncio.create_task(bridge._consume(backend, job.id, job.backend_job_id))
+                    bridge._consume_tasks.add(task)
+                    task.add_done_callback(bridge._consume_tasks.discard)
                     reattached += 1
                     continue
             job.status = JobStatus.pending

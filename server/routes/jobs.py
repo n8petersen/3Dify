@@ -1,4 +1,5 @@
 import re
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File
@@ -255,6 +256,39 @@ async def get_job(job_id: str, session: AsyncSession = Depends(get_session)):
         })
 
     return resp
+
+
+@router.post("/job/{job_id}/cancel")
+async def cancel_job(
+    request: Request, job_id: str, session: AsyncSession = Depends(get_session)
+):
+    result = await session.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job.status in (JobStatus.complete, JobStatus.failed, JobStatus.expired):
+        raise HTTPException(400, "Job already finished")
+
+    if job.backend and job.backend != "local" and job.backend_job_id:
+        from backends import BACKENDS
+
+        backend = BACKENDS.get(job.backend)
+        if backend is not None:
+            try:
+                await backend.cancel(job.backend_job_id)
+            except Exception:
+                pass  # best-effort — still mark cancelled locally below
+
+    job.status = JobStatus.failed
+    job.error_message = "Cancelled by user"
+    job.completed_at = datetime.now(timezone.utc)
+    await session.commit()
+
+    bridge = request.app.state.worker_bridge
+    await bridge._fan_out(job_id, {"type": "failed", "job_id": job_id, "error": "Cancelled by user"})
+    await bridge.broadcast_admin({"type": "job_failed", "job_id": job_id, "error": "Cancelled by user"})
+
+    return {"status": "cancelled"}
 
 
 @router.get("/job/{job_id}/thumbnail")
