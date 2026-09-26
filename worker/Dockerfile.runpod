@@ -22,15 +22,27 @@ WORKDIR /app
 # Hunyuan3D-2.1 code only — weights come from the network volume at runtime.
 # NOTE: only the hy3dshape sub-pipeline is used (img2stl.py imports
 # hy3dshape.pipelines.Hunyuan3DDiTFlowMatchingPipeline directly) — the texture/paint half of
-# the repo and its custom CUDA extension builds are not needed and are skipped here. This is
-# the one step most likely to need iteration once actually built (repo's requirements.txt may
-# pin a conflicting torch — drop that line first if `pip install` tries to reinstall torch).
+# the repo and its custom CUDA extension builds are not needed and are skipped here.
 #
 # IMPORTANT: this is Tencent-Hunyuan/Hunyuan3D-2.1, NOT Tencent/Hunyuan3D-2 — the latter is
 # the older 2.0 repo and only has a `hy3dgen` module, not `hy3dshape`. Cloning the wrong repo
 # here is what produced "ModuleNotFoundError: No module named 'hy3dshape'" on RunPod.
+#
+# Deliberately install Hunyuan3D-2.1/hy3dshape/requirements.txt (the narrower, unpinned
+# requirements file nested inside the repo's hy3dshape/ subdirectory) rather than the repo's
+# top-level requirements.txt. The top-level file pins numpy==1.24.4, which has no prebuilt
+# wheel for Python 3.12 (this base image's interpreter) and fails building from source
+# (pkg_resources/pkgutil.ImpImporter incompatibility). The top-level file also pulls in a pile
+# of training-only/texture-pipeline packages (pytorch-lightning, deepspeed, torchdiffeq, timm,
+# bpy, cupy-cuda12x, basicsr, realesrgan) that aren't reachable from the inference-only import
+# path used here (traced from hy3dshape/pipelines.py). The narrower file omits version pins
+# (letting pip resolve Python-3.12-compatible wheels) and already excludes those packages —
+# but it comments out scikit-image (actually required — hy3dshape's surface_extractors.py does
+# marching-cubes mesh extraction with it) and lists pymeshlab instead of pymeshfix (img2stl.py
+# actually imports pymeshfix, a different package) — both added back explicitly below.
 RUN git clone --depth 1 https://github.com/Tencent-Hunyuan/Hunyuan3D-2.1.git Hunyuan3D-2.1 \
-    && pip install --no-cache-dir -r Hunyuan3D-2.1/requirements.txt
+    && pip install --no-cache-dir -r Hunyuan3D-2.1/hy3dshape/requirements.txt \
+    && pip install --no-cache-dir scikit-image pymeshfix
 
 COPY img2stl.py ./
 COPY worker/pipeline.py worker/gpu_sampler.py worker/gpu_monitor.py worker/config.py worker/runpod_handler.py worker/requirements-runpod.txt ./worker/
