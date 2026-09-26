@@ -33,16 +33,21 @@ WORKDIR /app
 # top-level requirements.txt. The top-level file pins numpy==1.24.4, which has no prebuilt
 # wheel for Python 3.12 (this base image's interpreter) and fails building from source
 # (pkg_resources/pkgutil.ImpImporter incompatibility). The top-level file also pulls in a pile
-# of training-only/texture-pipeline packages (pytorch-lightning, deepspeed, torchdiffeq, timm,
+# of training-only/texture-pipeline packages (pytorch-lightning, deepspeed, torchdiffeq,
 # bpy, cupy-cuda12x, basicsr, realesrgan) that aren't reachable from the inference-only import
 # path used here (traced from hy3dshape/pipelines.py). The narrower file omits version pins
 # (letting pip resolve Python-3.12-compatible wheels) and already excludes those packages —
 # but it comments out scikit-image (actually required — hy3dshape's surface_extractors.py does
 # marching-cubes mesh extraction with it) and lists pymeshlab instead of pymeshfix (img2stl.py
 # actually imports pymeshfix, a different package) — both added back explicitly below.
+# timm is also added back: the released hunyuan3d-dit-v2-1 checkpoint's own config.yaml
+# (downloaded from HF at runtime, not part of this repo) targets the MoE-based
+# denoisers/hunyuandit.py::HunYuanDiTPlain class, not the timm-free denoisers/hunyuan3ddit.py —
+# moe_layers.py imports timm.models.vision_transformer directly, so it's a real runtime
+# dependency despite looking training-only from the code in this repo alone.
 RUN git clone --depth 1 https://github.com/Tencent-Hunyuan/Hunyuan3D-2.1.git Hunyuan3D-2.1 \
     && pip install --no-cache-dir -r Hunyuan3D-2.1/hy3dshape/requirements.txt \
-    && pip install --no-cache-dir scikit-image pymeshfix
+    && pip install --no-cache-dir scikit-image pymeshfix timm
 
 COPY img2stl.py ./
 COPY worker/pipeline.py worker/gpu_sampler.py worker/gpu_monitor.py worker/config.py worker/runpod_handler.py worker/requirements-runpod.txt ./worker/
