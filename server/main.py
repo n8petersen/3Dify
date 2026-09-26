@@ -98,15 +98,27 @@ async def lifespan(app: FastAPI):
                 reattached, requeued,
             )
 
-    # Background tasks
+    # Background tasks. The dispatch loop used to only run while a local WS
+    # worker was connected (handle_worker() started/cancelled it), which
+    # meant it never ran at all for a cloud-only backend with no local
+    # worker — jobs sat pending forever and backend_available never got set.
+    # It's safe to run unconditionally: LocalWebSocketBackend.available()
+    # already returns False until a worker connects, so this doesn't change
+    # local-backend behavior, just makes cloud backends actually dispatch.
     cleanup_task = asyncio.create_task(_cleanup_loop())
+    bridge._dispatch_task = asyncio.create_task(bridge._dispatch_loop())
     logger.info("Server started")
 
     yield
 
     cleanup_task.cancel()
+    bridge._dispatch_task.cancel()
     try:
         await cleanup_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await bridge._dispatch_task
     except asyncio.CancelledError:
         pass
     logger.info("Server stopped")

@@ -122,9 +122,6 @@ class WorkerBridge:
         await ws.send_json({"type": "welcome", "message": "Connected to server"})
         logger.info("Worker connected")
 
-        # Start dispatch loop
-        self._dispatch_task = asyncio.create_task(self._dispatch_loop())
-
         try:
             async for raw in ws.iter_json():
                 msg_type = raw.get("type")
@@ -142,9 +139,6 @@ class WorkerBridge:
             self.worker_ws = None
             self.worker_info = {}
             self.gpu_status = {}
-            if self._dispatch_task:
-                self._dispatch_task.cancel()
-                self._dispatch_task = None
             logger.info("Worker disconnected, cleaned up")
 
     async def _handle_worker_message(self, msg: dict) -> None:
