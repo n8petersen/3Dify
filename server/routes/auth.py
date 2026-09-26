@@ -2,7 +2,7 @@ import json
 import logging
 import time
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
@@ -173,7 +173,7 @@ async def login(
         raise HTTPException(401, "Invalid username or password")
 
     # Update last login
-    user.last_login_at = datetime.utcnow()
+    user.last_login_at = datetime.now(timezone.utc)
     await db.commit()
 
     sess = await auth_service.create_session(

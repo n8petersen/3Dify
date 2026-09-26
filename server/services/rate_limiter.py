@@ -1,6 +1,6 @@
 import ipaddress
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -50,7 +50,7 @@ async def check_rate_limit(
             remaining = max(0, settings.rate_limit_per_day - count)
             return count < settings.rate_limit_per_day, remaining
 
-    cutoff = datetime.utcnow() - timedelta(hours=24)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
 
     if user_id:
         from models.job import Job

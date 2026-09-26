@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,7 +34,7 @@ async def get_next_pending(session: AsyncSession) -> Job | None:
     job = result.scalar_one_or_none()
     if job:
         job.status = JobStatus.assigned
-        job.assigned_at = datetime.utcnow()
+        job.assigned_at = datetime.now(timezone.utc)
         await session.commit()
         await session.refresh(job)
     return job
@@ -72,7 +72,7 @@ async def mark_complete(
     job.is_watertight = is_watertight
     job.generation_time_s = generation_time_s
     job.gpu_metrics = gpu_metrics
-    job.completed_at = datetime.utcnow()
+    job.completed_at = datetime.now(timezone.utc)
     job.progress_pct = 100
     job.current_step = "complete"
     await session.commit()
@@ -90,7 +90,7 @@ async def mark_failed(
     job.status = JobStatus.failed
     job.error_message = error
     job.error_step = step
-    job.completed_at = datetime.utcnow()
+    job.completed_at = datetime.now(timezone.utc)
     await session.commit()
     await session.refresh(job)
     return job
@@ -104,7 +104,7 @@ async def expire_stale_jobs(session: AsyncSession) -> list[str]:
     worker picking a job off the queue. Cutoffs differ per row so this
     filters in Python rather than in the query.
     """
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     local_cutoff = now - timedelta(seconds=settings.job_timeout_s)
     cloud_cutoff = now - timedelta(seconds=settings.job_timeout_cloud_s)
     result = await session.execute(
@@ -116,7 +116,7 @@ async def expire_stale_jobs(session: AsyncSession) -> list[str]:
         if job.assigned_at and job.assigned_at < cutoff:
             job.status = JobStatus.expired
             job.error_message = "Job timed out"
-            job.completed_at = datetime.utcnow()
+            job.completed_at = datetime.now(timezone.utc)
             expired_ids.append(job.id)
     if expired_ids:
         await session.commit()
@@ -169,7 +169,7 @@ async def get_queue_summary(session: AsyncSession) -> dict:
 
 async def cleanup_old_job_files(session: AsyncSession) -> int:
     """Delete files for old completed/failed/expired jobs, keeping gallery items."""
-    cutoff = datetime.utcnow() - timedelta(days=settings.file_retention_days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=settings.file_retention_days)
     result = await session.execute(
         select(Job).where(
             Job.status.in_([JobStatus.complete, JobStatus.failed, JobStatus.expired]),
