@@ -10,8 +10,12 @@ progress_callback — RunPod's generator handler needs to yield incrementally, s
 pipeline call runs in a background thread and progress_callback pushes onto a
 queue.Queue that this generator drains and yields from. Every yielded dict is already
 in worker-protocol shape (job_progress/job_generated_image/job_complete/job_failed),
-matching what worker.py sends over the WebSocket — RunPodBackend.stream() forwards
-provider output straight into _handle_worker_message() unchanged.
+matching what worker.py sends over the WebSocket, EXCEPT job_complete: instead of
+inlining stl_base64/glb_base64 (too large for RunPod's job-result API — see the
+comment above the RESULTS_DIR write below), it writes the files to the network
+volume and sends stl_key/glb_key. RunPodBackend.stream() downloads+deletes those by
+key via RunPod's S3-compatible API and reassembles a base64 job_complete dict before
+forwarding to _handle_worker_message(), so the rest of the pipeline is unchanged.
 """
 
 import base64
@@ -31,6 +35,8 @@ logger = logging.getLogger("runpod_handler")
 
 TEMP_DIR = "/tmp/img2stl_worker"
 os.makedirs(TEMP_DIR, exist_ok=True)
+
+RESULTS_DIR = "/runpod-volume/results"
 
 
 def _make_progress_cb(q: queue.Queue):
@@ -97,23 +103,28 @@ def _run_job(job: dict, q: queue.Queue) -> None:
         stl_path = result["stl_path"]
         glb_path = result["glb_path"]
 
-        with open(stl_path, "rb") as f:
-            stl_b64 = base64.b64encode(f.read()).decode("ascii")
+        # Results go on the network volume rather than inline as base64 in the
+        # job payload — a real mesh's base64 STL (tens of MB) blows past RunPod's
+        # job-result API size limit. The volume is also reachable from outside
+        # RunPod via its S3-compatible API (bucket == network volume ID), so
+        # RunPodBackend.stream() downloads these by key and deletes them once
+        # it has the bytes.
+        job_results_dir = os.path.join(RESULTS_DIR, job_id)
+        os.makedirs(job_results_dir, exist_ok=True)
 
-        glb_b64 = None
-        glb_filename = None
+        stl_key = f"results/{job_id}/model.stl"
+        shutil.copyfile(stl_path, os.path.join(job_results_dir, "model.stl"))
+
+        glb_key = None
         if os.path.exists(glb_path):
-            with open(glb_path, "rb") as f:
-                glb_b64 = base64.b64encode(f.read()).decode("ascii")
-            glb_filename = os.path.basename(glb_path)
+            glb_key = f"results/{job_id}/model.glb"
+            shutil.copyfile(glb_path, os.path.join(job_results_dir, "model.glb"))
 
         q.put({
             "type": "job_complete",
             "job_id": job_id,
-            "stl_filename": os.path.basename(stl_path),
-            "stl_base64": stl_b64,
-            "glb_filename": glb_filename,
-            "glb_base64": glb_b64,
+            "stl_key": stl_key,
+            "glb_key": glb_key,
             "vertex_count": result["vertex_count"],
             "face_count": result["face_count"],
             "is_watertight": result["is_watertight"],

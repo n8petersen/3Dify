@@ -21,6 +21,7 @@ import logging
 import time
 from typing import AsyncIterator
 
+import boto3
 import httpx
 
 from config import settings
@@ -33,6 +34,31 @@ _BASE = "https://api.runpod.ai/v2"
 
 STREAM_POLL_INTERVAL_S = 1.0
 STATUS_POLL_INTERVAL_S = 2.0
+
+
+def _s3_client():
+    return boto3.client(
+        "s3",
+        endpoint_url=settings.runpod_s3_endpoint,
+        region_name=settings.runpod_s3_region,
+        aws_access_key_id=settings.runpod_s3_access_key,
+        aws_secret_access_key=settings.runpod_s3_secret_key,
+    )
+
+
+def _fetch_and_delete(key: str) -> bytes:
+    """Blocking — boto3 has no async client. Call via asyncio.to_thread.
+
+    Deletes the object from the network volume immediately after reading it,
+    so results don't accumulate there indefinitely (runpod_handler.py writes
+    the STL/GLB there because inlining them as base64 in the job-result
+    payload is too large for RunPod's job-result API — see stream() below).
+    """
+    client = _s3_client()
+    bucket = settings.runpod_network_volume_id
+    data = client.get_object(Bucket=bucket, Key=key)["Body"].read()
+    client.delete_object(Bucket=bucket, Key=key)
+    return data
 
 
 def _build_job_assign_payload(job: Job) -> dict:
@@ -97,6 +123,42 @@ class RunPodBackend:
             r.raise_for_status()
             return r.json()["id"]
 
+    async def _resolve_job_complete(self, output: dict) -> dict:
+        """job_complete arrives with stl_key/glb_key — files runpod_handler.py
+        wrote to the network volume — instead of stl_base64/glb_base64,
+        because a real mesh's base64 STL (tens of MB) exceeds RunPod's
+        job-result API size limit. Fetch by key via the volume's
+        S3-compatible API, delete once we have the bytes, and reassemble the
+        base64 shape worker_bridge.py already expects so nothing downstream
+        needs to change."""
+        if output.get("type") != "job_complete" or "stl_key" not in output:
+            return output
+        resolved = dict(output)
+        stl_key = resolved.pop("stl_key")
+        glb_key = resolved.pop("glb_key", None)
+        try:
+            stl_bytes = await asyncio.to_thread(_fetch_and_delete, stl_key)
+            resolved["stl_filename"] = "model.stl"
+            resolved["stl_base64"] = base64.b64encode(stl_bytes).decode()
+            if glb_key:
+                glb_bytes = await asyncio.to_thread(_fetch_and_delete, glb_key)
+                resolved["glb_filename"] = "model.glb"
+                resolved["glb_base64"] = base64.b64encode(glb_bytes).decode()
+            else:
+                resolved["glb_filename"] = None
+                resolved["glb_base64"] = None
+        except Exception:
+            logger.exception(
+                "Failed to fetch job result from RunPod network volume (key=%s)",
+                stl_key,
+            )
+            return {
+                "type": "job_failed",
+                "error": "Failed to retrieve generated model from RunPod storage",
+                "step": "runpod",
+            }
+        return resolved
+
     async def stream(self, handle: str) -> AsyncIterator[dict]:
         last_activity = time.monotonic()
         stalled = False
@@ -120,6 +182,7 @@ class RunPodBackend:
                     if isinstance(output, dict) and output.get("type"):
                         last_activity = time.monotonic()
                         stalled = False
+                        output = await self._resolve_job_complete(output)
                         yield output
                         if output["type"] in ("job_complete", "job_failed"):
                             return
@@ -169,9 +232,9 @@ class RunPodBackend:
         if status == "COMPLETED":
             output = data.get("output")
             if isinstance(output, dict) and output.get("type") == "job_complete":
-                yield output
+                yield await self._resolve_job_complete(output)
             elif isinstance(output, dict):
-                yield {"type": "job_complete", **output}
+                yield await self._resolve_job_complete({"type": "job_complete", **output})
             else:
                 yield {
                     "type": "job_failed",
