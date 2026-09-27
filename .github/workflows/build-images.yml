@@ -1,0 +1,248 @@
+name: Build & Push Images
+
+# Builds 3dify images (server, frontend, worker) and pushes to GHCR.
+# Runs on the homelab self-hosted DinD runner scale set in the k3s cluster.
+#
+# Images:
+#   ghcr.io/n8petersen/3dify-server    — FastAPI backend
+#   ghcr.io/n8petersen/3dify-frontend  — Vue/Nginx frontend
+#   ghcr.io/n8petersen/3dify-runpod-worker    — RunPod serverless GPU worker
+#
+# After building server+frontend, this workflow opens a PR in n8petersen/homelab
+# to bump the image SHA tag in the k8s deployment manifests.
+#
+# Auth: GITHUB_TOKEN (packages: write) pushes to GHCR automatically.
+# Cross-repo PR: uses a GitHub App token via actions/create-github-app-token.
+# App credentials (app_id, installation_id, private_key) are stored as
+# repository secrets: GH_APP_ID, GH_APP_INSTALLATION_ID, GH_APP_PRIVATE_KEY.
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: "Image(s) to build"
+        required: true
+        type: choice
+        options:
+          - server
+          - frontend
+          - worker
+          - all
+
+  push:
+    branches: [homelab]
+    paths:
+      - "server/**"
+      - "server/Dockerfile"
+      - "frontend/**"
+      - "frontend/Dockerfile"
+      - "worker/**"
+      - "worker/Dockerfile.runpod"
+
+  pull_request:
+    branches: [homelab]
+    paths:
+      - "server/**"
+      - "server/Dockerfile"
+      - "frontend/**"
+      - "frontend/Dockerfile"
+      - "worker/**"
+      - "worker/Dockerfile.runpod"
+
+jobs:
+  # Detect which images need building based on changed paths (for push/PR triggers).
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      server: ${{ steps.filter.outputs.server }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      worker: ${{ steps.filter.outputs.worker }}
+      short-sha: ${{ steps.sha.outputs.short-sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute short SHA
+        id: sha
+        run: echo "short-sha=$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            server:
+              - 'server/**'
+              - 'server/Dockerfile'
+            frontend:
+              - 'frontend/**'
+              - 'frontend/Dockerfile'
+            worker:
+              - 'worker/**'
+              - 'worker/Dockerfile.runpod'
+
+  build-server:
+    needs: detect-changes
+    if: |
+      (github.event_name == 'workflow_dispatch' && (inputs.image == 'server' || inputs.image == 'all')) ||
+      (github.event_name != 'workflow_dispatch' && needs.detect-changes.outputs.server == 'true')
+    runs-on: [self-hosted, homelab-dind]
+    permissions:
+      packages: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push 3dify-server
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: server/Dockerfile
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          provenance: false
+          tags: |
+            ghcr.io/n8petersen/3dify-server:${{ needs.detect-changes.outputs.short-sha }}
+          cache-from: type=registry,ref=ghcr.io/n8petersen/3dify-server:buildcache
+          cache-to: ${{ github.event_name != 'pull_request' && 'type=registry,ref=ghcr.io/n8petersen/3dify-server:buildcache,mode=max' || '' }}
+
+  build-frontend:
+    needs: detect-changes
+    if: |
+      (github.event_name == 'workflow_dispatch' && (inputs.image == 'frontend' || inputs.image == 'all')) ||
+      (github.event_name != 'workflow_dispatch' && needs.detect-changes.outputs.frontend == 'true')
+    runs-on: [self-hosted, homelab-dind]
+    permissions:
+      packages: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push 3dify-frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: frontend/Dockerfile
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          provenance: false
+          tags: |
+            ghcr.io/n8petersen/3dify-frontend:${{ needs.detect-changes.outputs.short-sha }}
+          cache-from: type=registry,ref=ghcr.io/n8petersen/3dify-frontend:buildcache
+          cache-to: ${{ github.event_name != 'pull_request' && 'type=registry,ref=ghcr.io/n8petersen/3dify-frontend:buildcache,mode=max' || '' }}
+
+  build-worker:
+    needs: detect-changes
+    if: |
+      (github.event_name == 'workflow_dispatch' && (inputs.image == 'worker' || inputs.image == 'all')) ||
+      (github.event_name != 'workflow_dispatch' && needs.detect-changes.outputs.worker == 'true')
+    runs-on: [self-hosted, homelab-dind]
+    permissions:
+      packages: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push 3dify-worker
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: worker/Dockerfile.runpod
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          provenance: false
+          tags: |
+            ghcr.io/n8petersen/3dify-runpod-worker:${{ needs.detect-changes.outputs.short-sha }}
+          cache-from: type=registry,ref=ghcr.io/n8petersen/3dify-runpod-worker:buildcache
+          cache-to: ${{ github.event_name != 'pull_request' && 'type=registry,ref=ghcr.io/n8petersen/3dify-runpod-worker:buildcache,mode=max' || '' }}
+
+  # After server+frontend build on main branch pushes, open a PR in the homelab repo
+  # to bump the deployment manifests to the new SHA.
+  bump-homelab-manifests:
+    needs: [detect-changes, build-server, build-frontend]
+    # Only run on push to homelab branch (not PRs), and only when at least one of
+    # server or frontend was built.
+    if: |
+      always() &&
+      github.event_name != 'pull_request' &&
+      (needs.build-server.result == 'success' || needs.build-frontend.result == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mint GitHub App token for homelab repo access
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: n8petersen
+          repositories: homelab
+
+      - name: Checkout homelab repo
+        uses: actions/checkout@v4
+        with:
+          repository: n8petersen/homelab
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Bump image SHA in deployment manifests
+        env:
+          NEW_SHA: ${{ needs.detect-changes.outputs.short-sha }}
+        run: |
+          # Replace the old SHA tag in both deployment files.
+          # The tag appears in image: ghcr.io/n8petersen/3dify-{server,frontend}:<sha>
+          OLD_SHA=$(grep -oP 'ghcr\.io/n8petersen/3dify-server:\K[a-f0-9]+' k8s/3dify/server-deployment.yaml | head -1)
+          if [ -z "$OLD_SHA" ]; then
+            echo "Could not detect current SHA from server-deployment.yaml" >&2
+            exit 1
+          fi
+          echo "Bumping $OLD_SHA → $NEW_SHA"
+          sed -i "s|ghcr\.io/n8petersen/3dify-server:${OLD_SHA}|ghcr.io/n8petersen/3dify-server:${NEW_SHA}|g" \
+            k8s/3dify/server-deployment.yaml
+          sed -i "s|ghcr\.io/n8petersen/3dify-frontend:${OLD_SHA}|ghcr.io/n8petersen/3dify-frontend:${NEW_SHA}|g" \
+            k8s/3dify/frontend-deployment.yaml
+
+      - name: Open PR in homelab
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          commit-message: "chore(3dify): bump images to ${{ needs.detect-changes.outputs.short-sha }}"
+          branch: "chore/3dify-bump-${{ needs.detect-changes.outputs.short-sha }}"
+          delete-branch: true
+          title: "chore(3dify): bump images to ${{ needs.detect-changes.outputs.short-sha }}"
+          body: |
+            Automated image bump from [3Dify workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).
+
+            Built from commit `${{ github.sha }}` on branch `${{ github.ref_name }}`.
+
+            Images pushed:
+            - `ghcr.io/n8petersen/3dify-server:${{ needs.detect-changes.outputs.short-sha }}`
+            - `ghcr.io/n8petersen/3dify-frontend:${{ needs.detect-changes.outputs.short-sha }}`
+
+            Merge this PR to deploy. ArgoCD will sync automatically.
