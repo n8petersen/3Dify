@@ -39,9 +39,12 @@ os.makedirs(TEMP_DIR, exist_ok=True)
 RESULTS_DIR = "/runpod-volume/results"
 
 
-def _make_progress_cb(q: queue.Queue):
+def _make_progress_cb(job_id: str, q: queue.Queue):
     def progress_cb(step, pct, message):
-        q.put({"type": "job_progress", "step": step, "progress_pct": pct, "message": message})
+        q.put({
+            "type": "job_progress", "job_id": job_id,
+            "step": step, "progress_pct": pct, "message": message,
+        })
     return progress_cb
 
 
@@ -50,7 +53,7 @@ def _run_job(job: dict, q: queue.Queue) -> None:
     job_id = job["job_id"]
     job_type = job.get("job_type", "image")
     settings = job.get("settings", {})
-    progress_cb = _make_progress_cb(q)
+    progress_cb = _make_progress_cb(job_id, q)
 
     output_dir = os.path.join(TEMP_DIR, job_id)
     image_path = None

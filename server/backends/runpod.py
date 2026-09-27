@@ -193,9 +193,23 @@ class RunPodBackend:
                     # the /stream response doesn't carry the "output"/"error"
                     # payload, so passing it through would lose the real error
                     # detail (or completed output) in favor of a generic message.
+                    #
+                    # Only return if that re-fetch actually agrees the job is
+                    # done. Observed live: /stream reported a terminal status
+                    # ~15s into a text job while the worker container kept
+                    # running for another ~3.5 minutes and (per its own logs)
+                    # completed normally — /stream's status lagged/disagreed
+                    # with reality. Returning unconditionally here silently
+                    # orphaned the job (no job_complete/job_failed ever
+                    # reached _consume()) until the stale-job sweep expired it
+                    # 20 minutes later. Treat a non-terminal fallback result
+                    # as "not actually done yet" and keep polling.
+                    got_terminal = False
                     async for msg in self._status_fallback(client, handle, None):
                         yield msg
-                    return
+                        got_terminal = True
+                    if got_terminal:
+                        return
 
                 if time.monotonic() - last_activity > settings.stream_stall_s:
                     if not stalled:
