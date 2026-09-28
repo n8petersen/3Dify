@@ -1,6 +1,6 @@
 import logging
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import bcrypt
@@ -75,7 +75,7 @@ async def create_session(
 ) -> Session:
     sess = Session(
         user_id=user_id,
-        expires_at=datetime.utcnow() + timedelta(days=settings.session_max_age_days),
+        expires_at=datetime.now(timezone.utc) + timedelta(days=settings.session_max_age_days),
         ip_address=ip,
         user_agent=user_agent,
     )
@@ -89,7 +89,7 @@ async def get_session_user(db: AsyncSession, session_id: str) -> Optional[User]:
     result = await db.execute(
         select(Session).where(
             Session.id == session_id,
-            Session.expires_at > datetime.utcnow(),
+            Session.expires_at > datetime.now(timezone.utc),
         )
     )
     sess = result.scalar_one_or_none()
@@ -117,7 +117,7 @@ async def delete_user_sessions(db: AsyncSession, user_id: str) -> int:
 
 async def cleanup_expired_sessions(db: AsyncSession) -> int:
     result = await db.execute(
-        delete(Session).where(Session.expires_at <= datetime.utcnow())
+        delete(Session).where(Session.expires_at <= datetime.now(timezone.utc))
     )
     await db.commit()
     return result.rowcount

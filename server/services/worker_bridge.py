@@ -50,6 +50,11 @@ class WorkerBridge:
         self.worker_info: dict = {}
         self.gpu_status: dict = {}
         self.paused: bool = False
+        # Cloud backends (RunPod, etc.) have no persistent connection to be
+        # "connected" — this tracks the last `backend.available()` health
+        # check made by the dispatch loop instead, so status endpoints don't
+        # have to make an extra live call on every request.
+        self.backend_available: bool = False
 
         # Client progress subscriptions: job_id -> set of WebSocket connections
         self._subscribers: dict[str, set[WebSocket]] = {}
@@ -61,6 +66,14 @@ class WorkerBridge:
         # every backend (local WS worker or a cloud one) is consumed the
         # same way by _consume() below. Keyed by job_id.
         self._job_queues: dict[str, asyncio.Queue] = {}
+
+        # Strong references to in-flight per-job consume() tasks. asyncio
+        # only holds a weak reference to a task started via create_task —
+        # with nothing else referencing it, the task can be silently
+        # garbage-collected mid-run (no exception, no log line). This bit
+        # the RunPod backend: a job's consume loop vanished ~4.5 minutes in
+        # with no trace, leaving the job stuck at status=assigned forever.
+        self._consume_tasks: set[asyncio.Task] = set()
 
     # ─── Client subscription ───────────────────────────────────────
 
@@ -117,9 +130,6 @@ class WorkerBridge:
         await ws.send_json({"type": "welcome", "message": "Connected to server"})
         logger.info("Worker connected")
 
-        # Start dispatch loop
-        self._dispatch_task = asyncio.create_task(self._dispatch_loop())
-
         try:
             async for raw in ws.iter_json():
                 msg_type = raw.get("type")
@@ -137,9 +147,6 @@ class WorkerBridge:
             self.worker_ws = None
             self.worker_info = {}
             self.gpu_status = {}
-            if self._dispatch_task:
-                self._dispatch_task.cancel()
-                self._dispatch_task = None
             logger.info("Worker disconnected, cleaned up")
 
     async def _handle_worker_message(self, msg: dict) -> None:
@@ -223,11 +230,15 @@ class WorkerBridge:
             try:
                 await asyncio.sleep(2)
 
+                if self.paused:
+                    continue
+
                 if not settings.allow_per_job_backend:
                     # Fast path — single configured backend, no per-job
                     # DB read needed to know which one to check.
                     backend = BACKENDS.get(settings.worker_backend)
-                    if backend is None or not await backend.available():
+                    self.backend_available = backend is not None and await backend.available()
+                    if not self.backend_available:
                         continue
                     async with SQLModelAsyncSession(engine, expire_on_commit=False) as session:
                         job = await queue.get_next_pending(session)
@@ -273,7 +284,9 @@ class WorkerBridge:
         await self.broadcast_admin({"type": "job_assigned", "job_id": job.id, "backend": backend.name})
         logger.info("Dispatched %s job %s to backend %s (handle=%s)", job.job_type, job.id, backend.name, handle)
 
-        asyncio.create_task(self._consume(backend, job.id, handle))
+        task = asyncio.create_task(self._consume(backend, job.id, handle))
+        self._consume_tasks.add(task)
+        task.add_done_callback(self._consume_tasks.discard)
 
     async def _consume(self, backend, job_id: str, handle: str) -> None:
         """Drain a backend's stream for one job, applying each message the

@@ -1,5 +1,5 @@
 import enum
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from uuid import uuid4
 
@@ -80,6 +80,6 @@ class Job(SQLModel, table=True):
     feedback_text: Optional[str] = Field(default=None, sa_column=Column(Text))
 
     # Timestamps
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     assigned_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
