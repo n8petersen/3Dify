@@ -83,7 +83,7 @@ jobs:
     if: |
       (github.event_name == 'workflow_dispatch' && (inputs.image == 'server' || inputs.image == 'all')) ||
       (github.event_name != 'workflow_dispatch' && needs.detect-changes.outputs.server == 'true')
-    runs-on: [self-hosted, homelab-dind]
+    runs-on: ubuntu-latest
     permissions:
       packages: write
       contents: read
@@ -118,7 +118,7 @@ jobs:
     if: |
       (github.event_name == 'workflow_dispatch' && (inputs.image == 'frontend' || inputs.image == 'all')) ||
       (github.event_name != 'workflow_dispatch' && needs.detect-changes.outputs.frontend == 'true')
-    runs-on: [self-hosted, homelab-dind]
+    runs-on: ubuntu-latest
     permissions:
       packages: write
       contents: read
@@ -153,7 +153,7 @@ jobs:
     if: |
       (github.event_name == 'workflow_dispatch' && (inputs.image == 'worker' || inputs.image == 'all')) ||
       (github.event_name != 'workflow_dispatch' && needs.detect-changes.outputs.worker == 'true')
-    runs-on: [self-hosted, homelab-dind]
+    runs-on: ubuntu-latest
     permissions:
       packages: write
       contents: read
