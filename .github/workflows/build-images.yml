@@ -98,12 +98,12 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.GHCR_PAT }}
 
       - name: Build and push 3dify-server
         uses: docker/build-push-action@v6
         with:
-          context: .
+          context: server
           file: server/Dockerfile
           platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}
@@ -133,12 +133,12 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.GHCR_PAT }}
 
       - name: Build and push 3dify-frontend
         uses: docker/build-push-action@v6
         with:
-          context: .
+          context: frontend
           file: frontend/Dockerfile
           platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}
@@ -168,7 +168,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.GHCR_PAT }}
 
       - name: Build and push 3dify-worker
         uses: docker/build-push-action@v6
