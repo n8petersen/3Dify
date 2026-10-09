@@ -19,6 +19,15 @@ export async function getJob(jobId) {
   return res.json();
 }
 
+export async function cancelJob(jobId) {
+  const res = await fetch(`${BASE}/api/job/${jobId}/cancel`, { method: 'POST', credentials: 'include' });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || err.message || `Cancel failed (${res.status})`);
+  }
+  return res.json();
+}
+
 export function getStlUrl(jobId) {
   return `${BASE}/api/job/${jobId}/stl`;
 }

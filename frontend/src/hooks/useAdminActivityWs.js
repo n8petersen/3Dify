@@ -19,6 +19,7 @@ export default function useAdminActivityWs({ maxJobs = 100 } = {}) {
   const [jobs, setJobs] = useState([]);
   const [connected, setConnected] = useState(false);
   const [workerConnected, setWorkerConnected] = useState(false);
+  const [workerBackend, setWorkerBackend] = useState('local');
   const wsRef = useRef(null);
   const reconnectRef = useRef(null);
   const backoffRef = useRef(1000);
@@ -45,6 +46,7 @@ export default function useAdminActivityWs({ maxJobs = 100 } = {}) {
         case 'snapshot':
           setJobs((msg.jobs || []).slice(0, maxJobs));
           setWorkerConnected(!!msg.worker_connected);
+          setWorkerBackend(msg.backend || 'local');
           break;
 
         case 'job_created':
@@ -130,5 +132,5 @@ export default function useAdminActivityWs({ maxJobs = 100 } = {}) {
     };
   }, [connect]);
 
-  return { jobs, connected, workerConnected };
+  return { jobs, connected, workerConnected, workerBackend };
 }

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from uuid import uuid4
 
@@ -13,5 +13,5 @@ class User(SQLModel, table=True):
     password_hash: str
     display_name: Optional[str] = None
     is_banned: bool = Field(default=False)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    last_login_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    last_login_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

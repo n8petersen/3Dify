@@ -1,10 +1,10 @@
-import json
 import logging
 import time
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -137,14 +137,15 @@ async def register(
         user_agent=request.headers.get("user-agent"),
     )
 
-    response = Response(status_code=201)
-    response.headers["content-type"] = "application/json"
+    response = JSONResponse(
+        status_code=201,
+        content={
+            "id": user.id,
+            "username": user.username,
+            "display_name": user.display_name,
+        },
+    )
     _set_session_cookie(response, sess.id)
-    response.body = json.dumps({
-        "id": user.id,
-        "username": user.username,
-        "display_name": user.display_name,
-    }).encode()
     return response
 
 
@@ -173,7 +174,7 @@ async def login(
         raise HTTPException(401, "Invalid username or password")
 
     # Update last login
-    user.last_login_at = datetime.utcnow()
+    user.last_login_at = datetime.now(timezone.utc)
     await db.commit()
 
     sess = await auth_service.create_session(
@@ -183,14 +184,15 @@ async def login(
         user_agent=request.headers.get("user-agent"),
     )
 
-    response = Response(status_code=200)
-    response.headers["content-type"] = "application/json"
+    response = JSONResponse(
+        status_code=200,
+        content={
+            "id": user.id,
+            "username": user.username,
+            "display_name": user.display_name,
+        },
+    )
     _set_session_cookie(response, sess.id)
-    response.body = json.dumps({
-        "id": user.id,
-        "username": user.username,
-        "display_name": user.display_name,
-    }).encode()
     return response
 
 
@@ -219,8 +221,6 @@ async def logout(
     if session_id:
         await auth_service.delete_session(db, session_id)
 
-    response = Response(status_code=200)
-    response.headers["content-type"] = "application/json"
+    response = JSONResponse(status_code=200, content={"ok": True})
     _clear_session_cookie(response)
-    response.body = json.dumps({"ok": True}).encode()
     return response

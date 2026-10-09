@@ -25,7 +25,8 @@ function StatPill({ label, value, accent, dot }) {
 }
 
 export default function AdminActivity() {
-  const { jobs, connected, workerConnected } = useAdminActivityWs({ maxJobs: 120 });
+  const { jobs, connected, workerConnected, workerBackend } = useAdminActivityWs({ maxJobs: 120 });
+  const isCloudBackend = workerBackend && workerBackend !== 'local';
   const [filter, setFilter] = useState('all');
   const [throughput, setThroughput] = useState(0);
   const completedRef = useRef([]);
@@ -85,7 +86,10 @@ export default function AdminActivity() {
           <StatPill label="Done" value={completedCount} />
           <StatPill label="Failed" value={failedCount} />
           <StatPill label="5m" value={`${throughput}/5m`} />
-          <StatPill label="Worker" value={workerConnected ? 'Online' : 'Offline'} />
+          <StatPill
+            label={isCloudBackend ? 'RunPod' : 'Worker'}
+            value={workerConnected ? (isCloudBackend ? 'Ready' : 'Online') : (isCloudBackend ? 'Unreachable' : 'Offline')}
+          />
         </div>
       </div>
 
