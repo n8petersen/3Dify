@@ -60,4 +60,8 @@ COPY worker/pipeline.py worker/gpu_sampler.py worker/gpu_monitor.py worker/confi
 RUN pip install --no-cache-dir -r worker/requirements-runpod.txt
 
 WORKDIR /app/worker
-CMD ["python", "-u", "runpod_handler.py"]
+# Override HOME and HF_HOME unconditionally here so endpoint env vars
+# (HOME=/workspace, HF_HOME=/workspace/.cache/huggingface — pointing at the
+# ephemeral container disk) cannot redirect model downloads away from the
+# network volume. This ensures weights persist across cold starts.
+CMD ["sh", "-c", "HOME=/runpod-volume HF_HOME=/runpod-volume/.cache/huggingface exec python -u runpod_handler.py"]
