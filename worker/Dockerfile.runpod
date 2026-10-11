@@ -14,8 +14,13 @@
 # torch 2.8.0 / Ubuntu 22.04. Re-check for a newer tag before building if this has gone stale.
 FROM runpod/pytorch:1.3.3-cu1290-torch280-ubuntu2204
 
+# HF_HUB_DISABLE_XET=1: without this, huggingface_hub's Xet CDN path keeps its own cache
+# index that doesn't recognize files already present under the classic blobs/<hash> layout —
+# every cold start re-downloads large shards (e.g. text_encoder_2) on top of the existing
+# cache instead of reusing it, which is what exhausts the network volume's 80GB quota.
 ENV HOME=/runpod-volume \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    HF_HUB_DISABLE_XET=1
 
 WORKDIR /app
 
