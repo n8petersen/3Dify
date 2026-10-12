@@ -40,6 +40,7 @@ export default function QueuePage() {
 
   const workerOnline = worker?.worker_connected;
   const lastSeen = worker?.lastSeen;
+  const isCloud = worker?.backend && worker.backend !== 'local';
 
   return (
     <div className="min-h-[calc(100vh-4rem)] flex items-center justify-center px-4 page-enter">
@@ -66,7 +67,9 @@ export default function QueuePage() {
             </div>
             <div className="flex-1">
               <p className="text-sm font-medium">GPU Worker</p>
-              <p className="text-xs text-[var(--color-muted)] font-mono">RTX 5070 Ti</p>
+              <p className="text-xs text-[var(--color-muted)] font-mono">
+                {isCloud ? 'RunPod Serverless' : 'Local GPU Worker'}
+              </p>
             </div>
             <div className="text-right">
               <span className={`text-xs font-mono ${
@@ -76,7 +79,11 @@ export default function QueuePage() {
                     ? 'text-[var(--color-danger)]'
                     : 'text-[var(--color-muted-2)]'
               }`}>
-                {workerOnline ? 'Online' : workerOnline === false ? 'Offline' : 'Checking...'}
+                {workerOnline
+                  ? (isCloud ? 'Ready' : 'Online')
+                  : workerOnline === false
+                    ? (isCloud ? 'Unreachable' : 'Offline')
+                    : 'Checking...'}
               </span>
               {lastSeen && (
                 <p className="text-[10px] text-[var(--color-muted-2)] font-mono mt-0.5">

@@ -128,7 +128,17 @@ def load_flux():
         transformer=transformer,
         torch_dtype=torch.bfloat16,
     )
-    _flux_pipeline.enable_model_cpu_offload()
+
+    # CPU offload is only needed when VRAM can't hold the full pipeline (~16GB).
+    # On 24GB GPUs (RTX 4090) skip it — per-step layer shuffling is the main
+    # source of generation latency and would cause jobs to timeout.
+    vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+    if vram_gb < 20:
+        _flux_pipeline.enable_model_cpu_offload()
+        logger.info(f"FLUX CPU offload enabled (VRAM: {vram_gb:.1f}GB)")
+    else:
+        _flux_pipeline.to("cuda")
+        logger.info(f"FLUX fully on GPU (VRAM: {vram_gb:.1f}GB)")
 
     elapsed = time.time() - t0
     logger.info(f"FLUX loaded in {elapsed:.1f}s")

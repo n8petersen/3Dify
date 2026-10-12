@@ -30,7 +30,7 @@ const TEXT_STEPS = [
   'exporting',
 ];
 
-export default function ProgressView({ step, pct, message, queuePosition, jobType }) {
+export default function ProgressView({ step, pct, message, queuePosition, jobType, onCancel, cancelling }) {
   const steps = jobType === 'text' ? TEXT_STEPS : IMAGE_STEPS;
 
   // If no step yet or status is pending, show queued
@@ -151,6 +151,16 @@ export default function ProgressView({ step, pct, message, queuePosition, jobTyp
             {isQueued && queuePosition ? `~${queuePosition * 3} min` : `${percent}%`}
           </span>
         </div>
+
+        {onCancel && (
+          <button
+            onClick={onCancel}
+            disabled={cancelling}
+            className="w-full mt-4 py-2.5 rounded-xl text-sm font-medium text-[var(--color-danger)] bg-[var(--color-danger)]/5 border border-[var(--color-danger)]/20 hover:bg-[var(--color-danger)]/10 transition-colors disabled:opacity-50"
+          >
+            {cancelling ? 'Cancelling…' : 'Cancel'}
+          </button>
+        )}
       </div>
     </div>
   );

@@ -1,5 +1,5 @@
 import hmac
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Header, Query, Request
 from pydantic import BaseModel
@@ -47,8 +47,10 @@ async def admin_login(body: LoginRequest):
 @router.get("/worker/status", dependencies=[Depends(_verify_admin)])
 async def worker_status(request: Request):
     bridge = _get_bridge(request)
+    is_local = settings.worker_backend == "local"
     return {
-        "connected": bridge.worker_connected,
+        "connected": bridge.worker_connected if is_local else bridge.backend_available,
+        "backend": settings.worker_backend,
         "info": bridge.worker_info,
         "paused": bridge.paused,
     }
@@ -242,7 +244,7 @@ async def cancel_job(job_id: str, session: AsyncSession = Depends(get_session)):
         raise HTTPException(400, "Job already finished")
     job.status = JobStatus.failed
     job.error_message = "Cancelled by admin"
-    job.completed_at = datetime.utcnow()
+    job.completed_at = datetime.now(timezone.utc)
     await session.commit()
     return {"status": "cancelled"}
 
@@ -415,7 +417,7 @@ async def audit_log(
 
 @router.get("/stats", dependencies=[Depends(_verify_admin)])
 async def stats(session: AsyncSession = Depends(get_session)):
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     cutoff_24h = now - timedelta(hours=24)
     result = await session.execute(

@@ -14,9 +14,10 @@ export default function WorkerStatusBadge() {
 
   const online = status.worker_connected;
   const paused = status.paused;
+  const isCloud = status.backend && status.backend !== 'local';
 
   let dotClass = 'bg-[var(--color-success)] fade-pulse';
-  let label = 'Online';
+  let label = isCloud ? 'Ready' : 'Online';
   let pillBg = 'bg-[var(--color-success)]/10';
   let pillBorder = 'border-[var(--color-success)]/20';
   let textClass = 'text-[var(--color-success)]';
@@ -29,7 +30,7 @@ export default function WorkerStatusBadge() {
     textClass = 'text-[var(--color-warning)]';
   } else if (!online) {
     dotClass = 'bg-[var(--color-danger)]';
-    label = 'Offline';
+    label = isCloud ? 'Unreachable' : 'Offline';
     pillBg = 'bg-[var(--color-danger)]/10';
     pillBorder = 'border-[var(--color-danger)]/20';
     textClass = 'text-[var(--color-danger)]';

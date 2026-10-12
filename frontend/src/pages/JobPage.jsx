@@ -4,15 +4,25 @@ import useJobWebSocket from '../hooks/useJobWebSocket';
 import ProgressView from '../components/ProgressView';
 import ResultsView from '../components/ResultsView';
 import { useToast } from '../components/Toast';
-import { getJob, getGeneratedImageUrl } from '../api';
+import { getJob, getGeneratedImageUrl, cancelJob } from '../api';
 
 export default function JobPage() {
   const { jobId } = useParams();
   const { progress, result, error: wsError, generatedImageUrl } = useJobWebSocket(jobId);
   const [job, setJob] = useState(null);
   const [pollError, setPollError] = useState(null);
+  const [cancelling, setCancelling] = useState(false);
   const toast = useToast();
   const pollRef = useRef(null);
+
+  const handleCancel = () => {
+    if (cancelling) return;
+    setCancelling(true);
+    cancelJob(jobId)
+      .then(() => getJob(jobId).then(setJob))
+      .catch((err) => toast.error(err.message))
+      .finally(() => setCancelling(false));
+  };
 
   // Fetch initial job state
   useEffect(() => {
@@ -141,6 +151,8 @@ export default function JobPage() {
             message={currentMessage}
             queuePosition={queuePosition}
             jobType={jobType}
+            onCancel={handleCancel}
+            cancelling={cancelling}
           />
         </div>
       )}

@@ -55,6 +55,16 @@ class Settings(BaseSettings):
     runpod_endpoint_id: str = ""
     runpod_cost_per_hour_usd: float = 1.10
 
+    # RunPod network volume S3-compatible API — job results land here (as
+    # plain files, from the worker side) instead of inlined as base64 in the
+    # job-result payload, which is too large for RunPod's API past a few MB.
+    # Bucket name is the network volume ID; endpoint is datacenter-specific.
+    runpod_network_volume_id: str = ""
+    runpod_s3_endpoint: str = "https://s3api-eu-ro-1.runpod.io"
+    runpod_s3_region: str = "EU-RO-1"
+    runpod_s3_access_key: str = ""
+    runpod_s3_secret_key: str = ""
+
     # GCP Cloud Run backend (not yet implemented)
     gcp_cloud_run_url: str = ""
     gcp_sa_key_json: str = ""
