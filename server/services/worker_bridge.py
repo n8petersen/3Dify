@@ -294,6 +294,11 @@ class WorkerBridge:
         start = time.monotonic()
         try:
             async for msg in backend.stream(handle):
+                # _status_fallback synthesises job_failed/job_complete without
+                # a job_id (it only knows the handle). Inject it here so
+                # _handle_job_failed/_handle_job_complete don't silently no-op.
+                if msg.get("type") in _JOB_SCOPED_TYPES and "job_id" not in msg:
+                    msg = {**msg, "job_id": job_id}
                 await self._process_job_message(msg)
         except Exception:
             logger.exception("Error consuming stream for job %s on backend %s", job_id, backend.name)

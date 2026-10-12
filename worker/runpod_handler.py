@@ -24,6 +24,7 @@ import os
 import queue
 import shutil
 import threading
+import traceback
 
 import runpod
 
@@ -32,6 +33,25 @@ import pipeline
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("runpod_handler")
+
+# Write errors to the network volume so they survive the container and can be
+# inspected from a debug pod after a failure (RunPod serverless doesn't expose
+# Python stdout/stderr via its log API).
+_LOG_DIR = "/runpod-volume/worker-logs"
+os.makedirs(_LOG_DIR, exist_ok=True)
+
+
+def _write_error_log(job_id: str, exc: Exception) -> None:
+    try:
+        import datetime
+        path = os.path.join(_LOG_DIR, f"{job_id}.log")
+        with open(path, "w") as f:
+            f.write(f"job_id: {job_id}\n")
+            f.write(f"time: {datetime.datetime.utcnow().isoformat()}Z\n")
+            f.write(f"error: {exc}\n\n")
+            traceback.print_exc(file=f)
+    except Exception:
+        pass
 
 TEMP_DIR = "/tmp/img2stl_worker"
 os.makedirs(TEMP_DIR, exist_ok=True)
@@ -86,6 +106,7 @@ def _run_job(job: dict, q: queue.Queue) -> None:
             result = pipeline.run_pipeline(image_path, output_dir, progress_cb, settings)
     except Exception as e:
         logger.error("Job %s failed: %s", job_id, e, exc_info=True)
+        _write_error_log(job_id, e)
         err_str = str(e).lower()
         if "cuda" in err_str or "gpu" in err_str or "out of memory" in err_str:
             error_msg = "GPU error during generation. Please try again later."
