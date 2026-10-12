@@ -8,7 +8,11 @@
 
 runpod>=1.7.0
 diffusers>=0.30
-transformers>=4.44
+# transformers 5.18.0 (2026-09-30) renamed Dinov2SelfAttention keys from
+# BERT-style (attention.attention.query) to q_proj/k_proj/v_proj/o_proj, which
+# doesn't match the Sep-2025 model.fp16.ckpt checkpoint on the network volume.
+# Pin below 5.18 until the checkpoint is re-saved with the new key format.
+transformers>=4.44,<5.18
 accelerate>=0.33
 bitsandbytes>=0.43
 huggingface_hub>=0.24
